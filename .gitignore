@@ -1,0 +1,16 @@
+node_modules/
+__pycache__/
+*.pyc
+.env
+data/.aether_jwt_secret
+
+# Local user data (database, uploads, generated media) — never commit
+data/*.db
+data/*.db-*
+data/audio/
+data/videos/
+data/uploads/
+
+# Build output
+dist/
+*.tsbuildinfo
