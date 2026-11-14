@@ -74,6 +74,7 @@ from backend.database import (
     AUDIO_DIR,
     BASE_DIR,
     DATA_DIR,
+    MENTOR_IMAGES_DIR,
     UPLOADS_DIR,
     VIDEOS_DIR,
     get_db,
@@ -92,6 +93,7 @@ from backend.job_worker import (
     enqueue_topic_resource_jobs,
     execute_job_sync,
     resume_incomplete_jobs_on_startup,
+    shutdown_job_executor,
 )
 from backend.tech_pulse import (
     TECH_PULSE_CATEGORIES,
@@ -103,6 +105,7 @@ from backend.tech_pulse import (
     save_story_bookmark,
     seed_official_sources,
     start_tech_pulse_scheduler,
+    stop_tech_pulse_scheduler,
     to_ist_date_str,
 )
 from backend.multilang_engine import SUPPORTED_LANGUAGES, normalize_language, validate_supported_language
@@ -119,11 +122,17 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:8000,http://localhost:8000,"
     "http://127.0.0.1:5173,http://localhost:5173"
 )
-ALLOWED_CORS_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get("AETHER_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
-    if origin.strip()
-]
+
+
+def get_cors_origins() -> List[str]:
+    return [
+        origin.strip()
+        for origin in os.environ.get("AETHER_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+        if origin.strip()
+    ]
+
+
+ALLOWED_CORS_ORIGINS = get_cors_origins()
 
 app.add_middleware(
     CORSMiddleware,
@@ -141,6 +150,12 @@ def on_startup() -> None:
         seed_official_sources(conn)
     resume_incomplete_jobs_on_startup()
     start_tech_pulse_scheduler(interval_seconds=1200)
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    stop_tech_pulse_scheduler()
+    shutdown_job_executor(wait=False)
 
 
 @app.exception_handler(Exception)
@@ -4545,9 +4560,6 @@ def set_mentor_message_feedback(
     return {"updated": True, "message_id": req.message_id, "feedback": req.feedback}
 
 
-MENTOR_IMAGES_DIR = os.path.join(DATA_DIR, "mentor_images")
-
-
 class MentorImageGenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=3, max_length=1000)
 
@@ -4834,6 +4846,23 @@ def tech_pulse_refresh(current_user: Dict[str, Any] = Depends(get_current_user))
     with get_db(commit=True) as conn:
         result = run_ingestion_cycle(conn, trigger_type="manual")
         return result
+
+
+@app.get("/api/health")
+def health_check():
+    """Verify backend process and SQLite database connectivity without exposing internals."""
+    try:
+        with get_db(commit=False) as conn:
+            conn.execute("SELECT 1").fetchone()
+        return JSONResponse(
+            status_code=200,
+            content={"status": "ok", "database": "ok"},
+        )
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "database": "unavailable"},
+        )
 
 
 # ============================================================================

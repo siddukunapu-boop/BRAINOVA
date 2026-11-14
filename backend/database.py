@@ -12,23 +12,40 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+
+
+def resolve_data_dir() -> str:
+    """Resolve the persistent data root from BRAINOVA_DATA_DIR, defaulting to <BASE_DIR>/data."""
+    custom = (os.environ.get("BRAINOVA_DATA_DIR") or "").strip()
+    if custom:
+        if os.path.isabs(custom):
+            return os.path.abspath(custom)
+        return os.path.abspath(os.path.join(BASE_DIR, custom))
+    return os.path.join(BASE_DIR, "data")
+
+
+DATA_DIR = resolve_data_dir()
 UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")
 VIDEOS_DIR = os.path.join(DATA_DIR, "videos")
+MENTOR_IMAGES_DIR = os.path.join(DATA_DIR, "mentor_images")
 
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(UPLOADS_DIR, exist_ok=True)
-os.makedirs(AUDIO_DIR, exist_ok=True)
-os.makedirs(VIDEOS_DIR, exist_ok=True)
+
+def ensure_data_directories() -> None:
+    """Ensure all persistent data and media directories exist."""
+    for directory in (DATA_DIR, UPLOADS_DIR, AUDIO_DIR, VIDEOS_DIR, MENTOR_IMAGES_DIR):
+        os.makedirs(directory, exist_ok=True)
+
+
+ensure_data_directories()
 
 
 def get_db_path() -> str:
-    custom = os.environ.get("AETHER_DB_PATH")
+    custom = (os.environ.get("AETHER_DB_PATH") or "").strip()
     if custom:
         if os.path.isabs(custom):
-            return custom
-        return os.path.join(BASE_DIR, custom)
+            return os.path.abspath(custom)
+        return os.path.abspath(os.path.join(BASE_DIR, custom))
     return os.path.join(DATA_DIR, "aetherlearn.db")
 
 
@@ -47,7 +64,11 @@ def dict_factory(cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
 
 @contextmanager
 def get_db(commit: bool = False):
-    conn = sqlite3.connect(get_db_path(), timeout=30.0, check_same_thread=False)
+    db_path = get_db_path()
+    db_parent = os.path.dirname(db_path)
+    if db_parent:
+        os.makedirs(db_parent, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
     conn.row_factory = dict_factory
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")

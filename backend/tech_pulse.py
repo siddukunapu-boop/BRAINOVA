@@ -1358,3 +1358,11 @@ def start_tech_pulse_scheduler(interval_seconds: int = 1200) -> None:
             name="brainova_tech_pulse_scheduler",
         )
         thread.start()
+
+
+def stop_tech_pulse_scheduler() -> None:
+    """Signal the Tech Pulse scheduler loop to exit cleanly."""
+    global _SCHEDULER_STARTED
+    with _SCHEDULER_LOCK:
+        _SCHEDULER_STOP_EVENT.set()
+        _SCHEDULER_STARTED = False

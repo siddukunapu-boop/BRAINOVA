@@ -612,3 +612,8 @@ def resume_incomplete_jobs_on_startup() -> int:
         dispatch_jobs_async(job_ids)
     return len(job_ids)
 
+
+def shutdown_job_executor(wait: bool = False) -> None:
+    """Safely shut down the background job executor without blocking application exit."""
+    _EXECUTOR.shutdown(wait=wait, cancel_futures=True)
+
