@@ -1,4 +1,9 @@
 {
+  "build": {
+    "env": {
+      "UV_LINK_MODE": "copy"
+    }
+  },
   "functions": {
     "api/*.py": {
       "includeFiles": "backend/**"

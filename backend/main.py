@@ -146,6 +146,8 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    if os.environ.get("VERCEL"):
+        return
     with get_db(commit=True) as conn:
         seed_official_sources(conn)
     resume_incomplete_jobs_on_startup()
@@ -191,8 +193,8 @@ class ResendVerificationRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = ""
+    password: str = ""
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -532,9 +534,18 @@ def receive_email_provider_webhook(payload: Dict[str, Any], request: Request) ->
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest) -> Dict[str, Any]:
-    email_clean = req.email.strip().lower()
+    email_clean = (req.email or "").strip().lower()
+    if not email_clean or not (req.password or "").strip():
+        raise HTTPException(status_code=400, detail="Email and password are required.")
     with get_db(commit=True) as conn:
         row = conn.execute("SELECT * FROM users WHERE email = ?", (email_clean,)).fetchone()
+        if not row:
+            try:
+                from backend.mongo_sync import restore_user_by_email_from_mongo
+
+                row = restore_user_by_email_from_mongo(conn, email_clean)
+            except Exception:
+                pass
         if not row or not verify_password(req.password, row["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid email or password.")
 

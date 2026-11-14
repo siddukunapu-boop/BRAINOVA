@@ -10,9 +10,12 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+import tempfile
+
 os.environ["VERCEL"] = "1"
-os.environ.setdefault("BRAINOVA_DATA_DIR", "/tmp/brainova_data")
-os.environ.setdefault("AETHER_DB_PATH", "/tmp/brainova_data/aetherlearn.db")
+_default_tmp_dir = "/tmp/brainova_data" if os.name != "nt" else os.path.join(tempfile.gettempdir(), "brainova_data")
+os.environ.setdefault("BRAINOVA_DATA_DIR", _default_tmp_dir)
+os.environ.setdefault("AETHER_DB_PATH", os.path.join(_default_tmp_dir, "aetherlearn.db"))
 os.environ.setdefault("BRAINOVA_DISABLE_SCHEDULER", "1")
 
 _loaded_app = None
@@ -20,16 +23,8 @@ _startup_err_msg = ""
 _startup_err_tb = ""
 
 try:
-    from backend.database import get_db, init_db
     from backend.main import app as _backend_app
-    from backend.tech_pulse import seed_official_sources
 
-    try:
-        init_db()
-        with get_db(commit=True) as _conn:
-            seed_official_sources(_conn)
-    except Exception:
-        pass
     _loaded_app = _backend_app
 except Exception as _startup_exc:
     _startup_err_msg = f"{type(_startup_exc).__name__}: {_startup_exc}"

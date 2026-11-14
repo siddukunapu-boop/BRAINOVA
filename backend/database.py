@@ -20,6 +20,9 @@ def resolve_data_dir() -> str:
     if os.environ.get("VERCEL"):
         if custom and custom.startswith("/tmp"):
             return os.path.abspath(custom)
+        if os.name == "nt":
+            import tempfile
+            return os.path.join(tempfile.gettempdir(), "brainova_data")
         return "/tmp/brainova_data"
     if custom:
         if os.path.isabs(custom):
@@ -42,7 +45,8 @@ def ensure_data_directories() -> None:
         for directory in (DATA_DIR, UPLOADS_DIR, AUDIO_DIR, VIDEOS_DIR, MENTOR_IMAGES_DIR):
             os.makedirs(directory, exist_ok=True)
     except OSError:
-        DATA_DIR = "/tmp/brainova_data"
+        import tempfile
+        DATA_DIR = "/tmp/brainova_data" if os.name != "nt" else os.path.join(tempfile.gettempdir(), "brainova_data")
         UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
         AUDIO_DIR = os.path.join(DATA_DIR, "audio")
         VIDEOS_DIR = os.path.join(DATA_DIR, "videos")
@@ -83,16 +87,13 @@ def dict_factory(cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
 _VERCEL_INIT_PATHS = set()
 
 
-def _trigger_mongo_sync(db_path: str, conn: Optional[sqlite3.Connection] = None) -> None:
+def _trigger_mongo_sync(db_path: str) -> None:
     if os.path.basename(db_path) != "aetherlearn.db":
         return
     try:
         from backend.mongo_sync import get_mongodb_uri, sync_sqlite_to_mongo
 
         if not get_mongodb_uri():
-            return
-        if os.environ.get("VERCEL") and conn is not None:
-            sync_sqlite_to_mongo(conn)
             return
 
         def _bg():
@@ -113,6 +114,33 @@ def _trigger_mongo_sync(db_path: str, conn: Optional[sqlite3.Connection] = None)
         pass
 
 
+def _trigger_mongo_restore_bg(db_path: str) -> None:
+    if os.path.basename(db_path) != "aetherlearn.db":
+        return
+    try:
+        from backend.mongo_sync import get_mongodb_uri, restore_sqlite_from_mongo
+
+        if not get_mongodb_uri():
+            return
+
+        def _bg_restore():
+            try:
+                bg_conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
+                bg_conn.row_factory = dict_factory
+                try:
+                    restore_sqlite_from_mongo(bg_conn)
+                finally:
+                    bg_conn.close()
+            except Exception:
+                pass
+
+        import threading
+
+        threading.Thread(target=_bg_restore, daemon=True, name="brainova_mongo_restore").start()
+    except Exception:
+        pass
+
+
 @contextmanager
 def get_db(commit: bool = False):
     db_path = get_db_path()
@@ -129,21 +157,14 @@ def get_db(commit: bool = False):
         conn.executescript(SCHEMA_SQL)
         run_migrations(conn)
         conn.commit()
-        if os.path.basename(db_path) == "aetherlearn.db":
-            try:
-                from backend.mongo_sync import get_mongodb_uri, restore_sqlite_from_mongo
-
-                if get_mongodb_uri():
-                    user_cnt = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
-                    if not user_cnt or int(user_cnt["cnt"]) == 0:
-                        restore_sqlite_from_mongo(conn)
-            except Exception:
-                pass
+        _trigger_mongo_restore_bg(db_path)
+    changes_before = conn.total_changes
     try:
         yield conn
         if commit:
             conn.commit()
-            _trigger_mongo_sync(db_path, conn)
+            if conn.total_changes > changes_before:
+                _trigger_mongo_sync(db_path)
     except Exception:
         if commit:
             conn.rollback()
@@ -803,16 +824,8 @@ def init_db() -> None:
     with get_db(commit=True) as conn:
         conn.executescript(SCHEMA_SQL)
         run_migrations(conn)
-        if os.path.basename(db_path) == "aetherlearn.db":
-            try:
-                from backend.mongo_sync import get_mongodb_uri, restore_sqlite_from_mongo
-
-                if get_mongodb_uri():
-                    user_cnt = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
-                    if not user_cnt or int(user_cnt["cnt"]) == 0:
-                        restore_sqlite_from_mongo(conn)
-            except Exception:
-                pass
+    if os.path.basename(db_path) == "aetherlearn.db" and not os.environ.get("VERCEL"):
+        _trigger_mongo_restore_bg(db_path)
 
 
 def log_activity(

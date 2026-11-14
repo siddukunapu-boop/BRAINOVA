@@ -240,6 +240,17 @@ def initiate_pending_registration(
             "SELECT id FROM users WHERE email = ?",
             (email_clean,),
         ).fetchone()
+        if not existing_user and os.environ.get("VERCEL"):
+            try:
+                from backend.mongo_sync import restore_user_by_email_from_mongo
+
+                if restore_user_by_email_from_mongo(conn, email_clean):
+                    existing_user = conn.execute(
+                        "SELECT id FROM users WHERE email = ?",
+                        (email_clean,),
+                    ).fetchone()
+            except Exception:
+                pass
         if existing_user:
             raise HTTPException(
                 status_code=409,

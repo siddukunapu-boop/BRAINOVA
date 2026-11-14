@@ -1,9 +1,10 @@
 """
 BRAINOVA — MongoDB Atlas Live Synchronization & Cloud Persistence Layer
-Mirrors all relational SQLite tables into MongoDB Atlas collections (`brainova` database)
-and automatically restores data into ephemeral serverless SQLite instances (e.g., Vercel /tmp).
+Mirrors relational SQLite tables into MongoDB Atlas collections (`brainova` database)
+and provides fast, non-blocking cold-start restoration for serverless runtimes (Vercel).
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import sqlite3
@@ -94,9 +95,9 @@ def get_mongo_database() -> Optional[Any]:
         if _MONGO_CLIENT is None or _MONGO_URI_CACHED != uri:
             _MONGO_CLIENT = MongoClient(
                 uri,
-                serverSelectionTimeoutMS=5000,
-                connectTimeoutMS=5000,
-                socketTimeoutMS=10000,
+                serverSelectionTimeoutMS=2500,
+                connectTimeoutMS=2500,
+                socketTimeoutMS=4000,
             )
             _MONGO_URI_CACHED = uri
         return _MONGO_CLIENT[get_mongodb_db_name()]
@@ -111,6 +112,105 @@ def check_mongo_connection() -> Dict[str, Any]:
         return {"configured": True, "connected": True, "database": db.name}
     except Exception as exc:
         return {"configured": True, "connected": False, "error": type(exc).__name__}
+
+
+def _insert_mongo_docs_into_sqlite(conn: sqlite3.Connection, table_name: str, docs: List[Dict[str, Any]]) -> int:
+    if not docs:
+        return 0
+    col_info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    valid_cols = [c["name"] if isinstance(c, dict) else c[1] for c in col_info]
+    if not valid_cols:
+        return 0
+    placeholders = ", ".join(["?"] * len(valid_cols))
+    col_list_sql = ", ".join(valid_cols)
+    sql = f"INSERT OR REPLACE INTO {table_name} ({col_list_sql}) VALUES ({placeholders})"
+    rows_to_insert = [tuple(doc.get(c) for c in valid_cols) for doc in docs]
+    conn.executemany(sql, rows_to_insert)
+    return len(rows_to_insert)
+
+
+def restore_user_by_email_from_mongo(conn: sqlite3.Connection, email: str) -> Optional[Dict[str, Any]]:
+    """Fast single-user lookup (<50ms) from MongoDB Atlas during serverless cold-start login."""
+    db = get_mongo_database()
+    if db is None:
+        return None
+    try:
+        email_clean = (email or "").strip().lower()
+        user_doc = db["users"].find_one({"email": email_clean})
+        if not user_doc:
+            return None
+        conn.execute("PRAGMA foreign_keys = OFF;")
+        try:
+            _insert_mongo_docs_into_sqlite(conn, "users", [user_doc])
+            pref_doc = db["user_preferences"].find_one({"user_id": user_doc.get("id")})
+            if pref_doc:
+                _insert_mongo_docs_into_sqlite(conn, "user_preferences", [pref_doc])
+            conn.commit()
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON;")
+        return conn.execute("SELECT * FROM users WHERE email = ?", (email_clean,)).fetchone()
+    except Exception as exc:
+        _logger.warning("Fast user restore warning: %s", type(exc).__name__)
+        return None
+
+
+def restore_user_by_id_from_mongo(conn: sqlite3.Connection, user_id: str) -> Optional[Dict[str, Any]]:
+    """Fast single-user lookup by ID (<50ms) from MongoDB Atlas for authenticated serverless requests."""
+    db = get_mongo_database()
+    if db is None:
+        return None
+    try:
+        uid = (user_id or "").strip()
+        if not uid:
+            return None
+        user_doc = db["users"].find_one({"id": uid})
+        if not user_doc:
+            return None
+        conn.execute("PRAGMA foreign_keys = OFF;")
+        try:
+            _insert_mongo_docs_into_sqlite(conn, "users", [user_doc])
+            pref_doc = db["user_preferences"].find_one({"user_id": uid})
+            if pref_doc:
+                _insert_mongo_docs_into_sqlite(conn, "user_preferences", [pref_doc])
+            conn.commit()
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON;")
+        return conn.execute(
+            "SELECT id, email, name, role, target_role, bio, avatar_color, avatar_url, created_at, updated_at FROM users WHERE id = ?",
+            (uid,),
+        ).fetchone()
+    except Exception as exc:
+        _logger.warning("Fast user ID restore warning: %s", type(exc).__name__)
+        return None
+
+
+def sync_table_to_mongo(conn: sqlite3.Connection, table_name: str, pk_col: str = "id") -> int:
+    """Sync a single SQLite table to MongoDB Atlas quickly."""
+    db = get_mongo_database()
+    if db is None:
+        return 0
+    try:
+        from pymongo import ReplaceOne
+
+        rows = conn.execute(f"SELECT * FROM {table_name}").fetchall()
+        coll = db[table_name]
+        ops = []
+        current_ids = []
+        pk_cols = [c.strip() for c in pk_col.split(",") if c.strip()]
+        for r in rows:
+            doc = dict(r)
+            doc_id = ":".join(str(doc.get(c, "")) for c in pk_cols)
+            if not doc_id or doc_id == ":":
+                continue
+            doc["_id"] = doc_id
+            current_ids.append(doc_id)
+            ops.append(ReplaceOne({"_id": doc_id}, doc, upsert=True))
+        if ops:
+            coll.bulk_write(ops, ordered=False)
+        return len(ops)
+    except Exception as exc:
+        _logger.warning("Single table sync warning (%s): %s", table_name, type(exc).__name__)
+        return 0
 
 
 def sync_sqlite_to_mongo(conn: sqlite3.Connection) -> Dict[str, int]:
@@ -147,9 +247,6 @@ def sync_sqlite_to_mongo(conn: sqlite3.Connection) -> Dict[str, int]:
             if ops:
                 coll.bulk_write(ops, ordered=False)
                 coll.delete_many({"_id": {"$nin": current_ids}})
-            else:
-                # Only clear collection if the local table actually has 0 rows AND we're not on an uninitialized DB
-                pass
             counts[table_name] = len(ops)
     except Exception as exc:
         _logger.warning("MongoDB sync warning: %s", type(exc).__name__)
@@ -159,39 +256,31 @@ def sync_sqlite_to_mongo(conn: sqlite3.Connection) -> Dict[str, int]:
 
 
 def restore_sqlite_from_mongo(conn: sqlite3.Connection) -> Dict[str, int]:
-    """Restore rows from MongoDB Atlas into SQLite (used on cold start or empty SQLite DB)."""
+    """Restore rows from MongoDB Atlas into SQLite in parallel."""
     db = get_mongo_database()
     if db is None:
         return {}
 
     restored: Dict[str, int] = {}
     try:
-        existing_Collections = set(db.list_collection_names())
+        def _fetch_table(item: tuple[str, str]) -> tuple[str, List[Dict[str, Any]]]:
+            t_name, _ = item
+            try:
+                return t_name, list(db[t_name].find({}))
+            except Exception:
+                return t_name, []
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            fetched = list(pool.map(_fetch_table, SYNC_TABLES))
+
         conn.execute("PRAGMA foreign_keys = OFF;")
         try:
-            for table_name, pk_col in SYNC_TABLES:
-                if table_name not in existing_Collections:
-                    continue
-                docs = list(db[table_name].find({}))
+            for table_name, docs in fetched:
                 if not docs:
                     continue
-
-                col_info = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-                valid_cols = [c["name"] if isinstance(c, dict) else c[1] for c in col_info]
-                if not valid_cols:
-                    continue
-
-                placeholders = ", ".join(["?"] * len(valid_cols))
-                col_list_sql = ", ".join(valid_cols)
-                sql = f"INSERT OR REPLACE INTO {table_name} ({col_list_sql}) VALUES ({placeholders})"
-
-                rows_to_insert = []
-                for doc in docs:
-                    rows_to_insert.append(tuple(doc.get(c) for c in valid_cols))
-
-                if rows_to_insert:
-                    conn.executemany(sql, rows_to_insert)
-                    restored[table_name] = len(rows_to_insert)
+                count = _insert_mongo_docs_into_sqlite(conn, table_name, docs)
+                if count:
+                    restored[table_name] = count
             conn.commit()
         finally:
             conn.execute("PRAGMA foreign_keys = ON;")

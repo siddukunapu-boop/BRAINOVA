@@ -342,7 +342,13 @@ def ensure_user_preferences(conn, user_id: str, decrypt_in_memory: bool = True) 
         aad_ctx = f"{user_id}:{col}"
         if is_encrypted_credential(stored_val):
             if decrypt_in_memory:
-                result[col] = decrypt_credential(stored_val, aad_context=aad_ctx)
+                try:
+                    result[col] = decrypt_credential(stored_val, aad_context=aad_ctx)
+                except CredentialEncryptionError:
+                    if not os.environ.get("VERCEL"):
+                        raise
+                    result[col] = ""
+                    migrated_cols[col] = ""
         elif stored_val.startswith("enc:"):
             raise CredentialEncryptionError(f"Unsupported or corrupted encrypted credential in column '{col}'.")
         else:
@@ -466,6 +472,13 @@ def get_current_user(
             "SELECT id, email, name, role, target_role, bio, avatar_color, avatar_url, created_at, updated_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
+        if not user:
+            try:
+                from backend.mongo_sync import restore_user_by_id_from_mongo
+
+                user = restore_user_by_id_from_mongo(conn, user_id)
+            except Exception:
+                pass
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account no longer exists.")
         prefs = ensure_user_preferences(conn, user_id)

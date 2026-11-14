@@ -631,12 +631,17 @@ def migrate_plaintext_credentials(
 
             if is_encrypted_credential(raw_val):
                 # Verify existing encrypted credential is decryptable; STOP if key is missing/invalid
-                decrypted = decrypt_credential(raw_val, aad_context=aad_ctx, keyring=active_keyring)
-                if not decrypted:
-                    raise CredentialEncryptionError(
-                        f"Verification failed for existing encrypted credential '{col}' of user '{user_id}'."
-                    )
-                verified_existing_fields += 1
+                try:
+                    decrypted = decrypt_credential(raw_val, aad_context=aad_ctx, keyring=active_keyring)
+                    if not decrypted:
+                        raise CredentialEncryptionError(
+                            f"Verification failed for existing encrypted credential '{col}' of user '{user_id}'."
+                        )
+                    verified_existing_fields += 1
+                except CredentialEncryptionError:
+                    if not os.environ.get("VERCEL"):
+                        raise
+                    col_updates[col] = ""
             elif raw_val.startswith("enc:"):
                 raise CredentialEncryptionError(
                     f"Unsupported or corrupted encrypted prefix on column '{col}' for user '{user_id}'."
