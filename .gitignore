@@ -2,14 +2,28 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 data/.aether_jwt_secret
+data/.aether_master_key
+data/.aether_otp_secret
+data/backups/
+data/
+*.bak
 
-# Local user data (database, uploads, generated media) — never commit
+# Local user data & SQLite databases (database, uploads, generated media) — never commit
+*.db
+*.db-*
 data/*.db
 data/*.db-*
 data/audio/
 data/videos/
 data/uploads/
+
+# Temporary scratch scripts, logs, and compiled binaries
+scratch/
+*.exe
+*.log
 
 # Build output
 dist/

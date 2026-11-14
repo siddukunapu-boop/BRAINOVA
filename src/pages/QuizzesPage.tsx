@@ -7,7 +7,6 @@ import {
   Eye,
   Trash2,
   RotateCcw,
-  Sparkles,
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp } from '../context/AppContext';
@@ -62,9 +61,28 @@ export const QuizzesPage: React.FC = () => {
   };
 
   const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}m ${s}s`;
+    const clamped = Math.max(0, Math.floor(secs));
+    const m = Math.floor(clamped / 60);
+    const s = clamped % 60;
+    return `${m}m ${String(s).padStart(2, '0')}s`;
+  };
+
+  const formatSubmittedParts = (iso: string) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+      return { date: '—', time: '' };
+    }
+    return {
+      date: d.toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      }),
+      time: d.toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+    };
   };
 
   return (
@@ -85,26 +103,22 @@ export const QuizzesPage: React.FC = () => {
           </span>
           <h1 style={{ fontSize: '1.65rem' }}>Quizzes and Results</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem' }}>
-            Review your recorded 20-question topic MCQ attempts and AI Studio quiz results, inspect
-            detailed question explanations, or retake assessments.
+            Review your recorded 20-question topic MCQ attempts, inspect detailed question
+            explanations, or retake assessments.
           </p>
         </div>
-
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => navigate('/studio?tool=quiz')}
-        >
-          <Sparkles size={16} />
-          <span>Generate Custom Studio Quiz</span>
-        </button>
       </div>
 
-      {/* Attempt History Table */}
-      <div className="card">
-        <h2 style={{ fontSize: '1.2rem', marginBottom: '14px' }}>
-          Recorded Examination Attempts ({attempts.length})
-        </h2>
+      {/* Attempt History */}
+      <div className="card exam-history-shell">
+        <div className="exam-history-header">
+          <div className="exam-history-heading-group">
+            <h2 className="exam-history-heading">Recorded Examination Attempts</h2>
+            <span className="exam-attempt-count-badge" aria-label={`${attempts.length} attempts`}>
+              {attempts.length}
+            </span>
+          </div>
+        </div>
 
         {loading ? (
           <p style={{ color: 'var(--text-muted)' }}>Loading attempts...</p>
@@ -113,8 +127,7 @@ export const QuizzesPage: React.FC = () => {
             <CheckSquare size={42} color="var(--text-subtle)" style={{ marginBottom: '12px' }} />
             <h3 style={{ marginBottom: '6px' }}>No Quiz Attempts Recorded Yet</h3>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '16px' }}>
-              Open any Topic Workspace inside your roadmaps to take its 20-question MCQ exam, or
-              generate a source-grounded quiz in AI Studio.
+              Open any Topic Workspace inside your roadmaps to take its 20-question MCQ exam.
             </p>
             <button
               type="button"
@@ -125,60 +138,196 @@ export const QuizzesPage: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="table-wrapper">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Topic / Examination Title</th>
-                  <th>Score</th>
-                  <th>Correct / Wrong / Unanswered</th>
-                  <th>Time Taken</th>
-                  <th>Status</th>
-                  <th>Submitted At</th>
-                  <th style={{ textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {attempts.map((att) => (
-                  <tr key={att.id}>
-                    <td>
-                      <strong style={{ color: 'var(--text-primary)' }}>{att.topic_title}</strong>
-                    </td>
-                    <td>
-                      <strong>
-                        {att.score} / {att.max_score}
-                      </strong>{' '}
-                      ({att.percentage}%)
-                    </td>
-                    <td>
-                      <span style={{ color: '#6ee7b7' }}>{att.correct_count}✓</span> •{' '}
-                      <span style={{ color: '#fca5a5' }}>{att.incorrect_count}✗</span> •{' '}
-                      <span style={{ color: '#fcd34d' }}>{att.unanswered_count}—</span>
-                    </td>
-                    <td>
-                      <Clock size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-                      {formatTime(att.duration_seconds || 0)}
-                    </td>
-                    <td>
+          <>
+            {/* Desktop Table */}
+            <div className="exam-table-shell">
+              <table className="exam-table">
+                <thead>
+                  <tr>
+                    <th className="exam-col-title">Examination / Topic</th>
+                    <th className="exam-col-score">Score</th>
+                    <th className="exam-col-summary">Answer Summary</th>
+                    <th className="exam-col-time">Time Taken</th>
+                    <th className="exam-col-result">Result</th>
+                    <th className="exam-col-date">Submitted At</th>
+                    <th className="exam-col-action">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attempts.map((att) => {
+                    const submitted = formatSubmittedParts(att.created_at);
+                    return (
+                      <tr key={att.id}>
+                        <td className="exam-col-title">
+                          <span className="exam-title-text">{att.topic_title}</span>
+                        </td>
+                        <td className="exam-col-score">
+                          <div className="exam-score-cell">
+                            <span className="exam-score-main">
+                              {att.score} / {att.max_score}
+                            </span>
+                            <span
+                              className={`exam-score-pct ${
+                                att.passed ? 'is-pass' : 'is-fail'
+                              }`}
+                            >
+                              {att.percentage}%
+                            </span>
+                          </div>
+                        </td>
+                        <td className="exam-col-summary">
+                          <div className="exam-summary-row">
+                            <span className="exam-sum-token exam-sum-correct">
+                              {att.correct_count} ✓
+                            </span>
+                            <span className="exam-sum-sep" aria-hidden="true">
+                              ·
+                            </span>
+                            <span className="exam-sum-token exam-sum-wrong">
+                              {att.incorrect_count} ✕
+                            </span>
+                            <span className="exam-sum-sep" aria-hidden="true">
+                              ·
+                            </span>
+                            <span className="exam-sum-token exam-sum-unanswered">
+                              {att.unanswered_count} —
+                            </span>
+                          </div>
+                        </td>
+                        <td className="exam-col-time">
+                          <span className="exam-time-cell">
+                            <Clock size={13} aria-hidden="true" />
+                            <span>{formatTime(att.duration_seconds || 0)}</span>
+                          </span>
+                        </td>
+                        <td className="exam-col-result">
+                          <span
+                            className={`badge ${
+                              att.passed ? 'badge-success' : 'badge-danger'
+                            }`}
+                          >
+                            {att.passed ? 'Passed' : 'Failed'}
+                          </span>
+                        </td>
+                        <td className="exam-col-date">
+                          <div className="exam-date-cell">
+                            <span className="exam-date-day">{submitted.date}</span>
+                            {submitted.time && (
+                              <span className="exam-date-time">{submitted.time}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="exam-col-action">
+                          <div className="exam-action-group">
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => inspectAttempt(att.id)}
+                            >
+                              <Eye size={14} aria-hidden="true" />
+                              <span>Review</span>
+                            </button>
+                            {att.roadmap_id && att.topic_id && (
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() =>
+                                  navigate(
+                                    `/roadmaps/${att.roadmap_id}?expand=${att.topic_id}&tab=mcqs`
+                                  )
+                                }
+                                title="Retake examination"
+                                aria-label={`Retake ${att.topic_title}`}
+                              >
+                                <RotateCcw size={13} aria-hidden="true" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="btn btn-danger btn-sm"
+                              onClick={() => handleDeleteAttempt(att.id)}
+                              title="Delete attempt"
+                              aria-label={`Delete attempt ${att.topic_title}`}
+                            >
+                              <Trash2 size={14} aria-hidden="true" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Tablet & Mobile Cards */}
+            <div className="exam-cards-list">
+              {attempts.map((att) => {
+                const submitted = formatSubmittedParts(att.created_at);
+                const pct = Math.max(0, Math.min(100, Number(att.percentage) || 0));
+                return (
+                  <article key={att.id} className="exam-mobile-card">
+                    <div className="exam-mobile-top">
+                      <span className="exam-title-text">{att.topic_title}</span>
                       <span
-                        className={`badge ${
-                          att.passed ? 'badge-success' : 'badge-warning'
-                        }`}
+                        className={`badge ${att.passed ? 'badge-success' : 'badge-danger'}`}
                       >
-                        {att.passed ? 'Passed (70%+)' : 'Needs Retake'}
+                        {att.passed ? 'Passed' : 'Failed'}
                       </span>
-                    </td>
-                    <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      {new Date(att.created_at).toLocaleString()}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', gap: '6px' }}>
+                    </div>
+
+                    <div className="exam-mobile-score-box">
+                      <div className="exam-mobile-score-row">
+                        <span className="exam-score-main">
+                          {att.score} / {att.max_score}
+                        </span>
+                        <span
+                          className={`exam-score-pct ${att.passed ? 'is-pass' : 'is-fail'}`}
+                        >
+                          {att.percentage}%
+                        </span>
+                      </div>
+                      <div className="exam-score-bar-track" aria-hidden="true">
+                        <div
+                          className={`exam-score-bar-fill ${att.passed ? 'is-pass' : 'is-fail'}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="exam-mobile-summary-grid">
+                      <div className="exam-mobile-stat">
+                        <span>Correct</span>
+                        <strong className="exam-sum-correct">{att.correct_count} ✓</strong>
+                      </div>
+                      <div className="exam-mobile-stat">
+                        <span>Wrong</span>
+                        <strong className="exam-sum-wrong">{att.incorrect_count} ✕</strong>
+                      </div>
+                      <div className="exam-mobile-stat">
+                        <span>Unanswered</span>
+                        <strong className="exam-sum-unanswered">{att.unanswered_count} —</strong>
+                      </div>
+                    </div>
+
+                    <div className="exam-mobile-bottom">
+                      <div className="exam-mobile-meta">
+                        <span className="exam-time-cell">
+                          <Clock size={13} aria-hidden="true" />
+                          <span>{formatTime(att.duration_seconds || 0)}</span>
+                        </span>
+                        <span>
+                          {submitted.date}
+                          {submitted.time ? ` · ${submitted.time}` : ''}
+                        </span>
+                      </div>
+                      <div className="exam-action-group">
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"
                           onClick={() => inspectAttempt(att.id)}
                         >
-                          <Eye size={14} />
+                          <Eye size={14} aria-hidden="true" />
                           <span>Review</span>
                         </button>
                         {att.roadmap_id && att.topic_id && (
@@ -191,7 +340,7 @@ export const QuizzesPage: React.FC = () => {
                               )
                             }
                           >
-                            <RotateCcw size={13} />
+                            <RotateCcw size={13} aria-hidden="true" />
                             <span>Retake</span>
                           </button>
                         )}
@@ -200,16 +349,17 @@ export const QuizzesPage: React.FC = () => {
                           className="btn btn-danger btn-sm"
                           onClick={() => handleDeleteAttempt(att.id)}
                           title="Delete attempt"
+                          aria-label={`Delete attempt ${att.topic_title}`}
                         >
-                          <Trash2 size={14} />
+                          <Trash2 size={14} aria-hidden="true" />
                         </button>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
 

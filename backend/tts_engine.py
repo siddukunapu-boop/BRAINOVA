@@ -47,7 +47,7 @@ def _generate_fallback_speech_envelope_wav(
     )
 
     for idx, turn in enumerate(turns):
-        text = turn.get("text", "") or turn.get("narration", "") or "Educational concept explanation."
+        text = turn.get("spoken_text") or turn.get("text", "") or turn.get("narration", "") or "Educational concept explanation."
         speaker = turn.get("speaker", "Alex")
         base_freq = 165.0 if ("alex" in speaker.lower() or idx % 2 == 0) else 215.0
         words = text.split()
@@ -85,21 +85,36 @@ def synthesize_podcast_audio(
     openai_api_key: Optional[str] = None,
     language: str = "English",
     target_duration_sec: Optional[int] = None,
+    require_native_voice: bool = False,
 ) -> Dict[str, Any]:
     """
     Synthesizes a real playable audio file (.wav) from a multi-speaker podcast or video narration script.
     Supports English, Telugu, Hindi, Kannada, Tamil, and Marathi.
+    When `require_native_voice` is True, never silently falls back to English SAPI voices or synthetic
+    beeps if native-language TTS is unavailable; reports an explicit structured error state instead.
     """
     os.makedirs(AUDIO_DIR, exist_ok=True)
     wav_filename = f"{output_id}.wav"
     output_path = os.path.join(AUDIO_DIR, wav_filename)
-    culture = LANGUAGE_CULTURE_MAP.get(language, "en-US")
+    culture = LANGUAGE_CULTURE_MAP.get(language)
+    if not culture:
+        return {
+            "file_name": "",
+            "file_path": "",
+            "audio_url": "",
+            "duration_seconds": 0,
+            "language": language,
+            "provider": "unavailable",
+            "status": "unsupported_tts_language",
+            "voice_supported": False,
+            "error": f"Unsupported TTS language '{language}'.",
+        }
 
     # 1. Try OpenAI TTS if configured (supports multilingual UTF-8 scripts natively)
     if openai_api_key and openai_api_key.strip():
         try:
             full_text = "\n\n".join(
-                f"{turn.get('speaker', 'Host')}: {turn.get('text', '') or turn.get('narration', '')}"
+                f"{turn.get('speaker', 'Host')}: {turn.get('spoken_text') or turn.get('text', '') or turn.get('narration', '')}"
                 for turn in dialogue
             )[:3900]
             with httpx.Client(timeout=35.0) as client:
@@ -124,31 +139,47 @@ def synthesize_podcast_audio(
                         "duration_seconds": duration_sec,
                         "language": language,
                         "provider": "openai_tts_1",
+                        "status": "ready",
+                        "voice_supported": True,
                     }
         except Exception:
             pass
 
     # 2. Synthesize real spoken WAV using Windows SAPI (.NET System.Speech) with UTF-8 BOM for Indic scripts
+    sapi_missing_native = False
     try:
         ps_script_path = os.path.join(AUDIO_DIR, f"tts_{output_id}.ps1")
         ps_lines = [
             "Add-Type -AssemblyName System.Speech",
             "$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer",
             "$synth.Rate = 0",
-            f"$synth.SetOutputToWaveFile('{output_path.replace(chr(39), chr(39)+chr(39))}')",
             "$installed = $synth.GetInstalledVoices() | Where-Object { $_.Enabled }",
             f"$cultureVoice = ($installed | Where-Object {{ $_.VoiceInfo.Culture.Name -eq '{culture}' }} | Select-Object -First 1)",
-            "$voices = $installed | ForEach-Object { $_.VoiceInfo.Name }",
-            "$voiceA = if ($cultureVoice) { $cultureVoice.VoiceInfo.Name } else { ($voices | Where-Object { $_ -match 'David' } | Select-Object -First 1) }",
-            "$voiceB = if ($cultureVoice) { $cultureVoice.VoiceInfo.Name } else { ($voices | Where-Object { $_ -match 'Zira' } | Select-Object -First 1) }",
-            "if (-not $voiceA) { $voiceA = $voices[0] }",
-            "if (-not $voiceB) { $voiceB = $voices[-1] }",
-            "$builder = New-Object System.Speech.Synthesis.PromptBuilder",
         ]
+        if require_native_voice and language != "English":
+            ps_lines.extend(
+                [
+                    "if (-not $cultureVoice) {",
+                    "  $synth.Dispose()",
+                    "  Write-Error 'NO_NATIVE_SAPI_VOICE'",
+                    "  exit 42",
+                    "}",
+                ]
+            )
+        ps_lines.extend(
+            [
+                f"$synth.SetOutputToWaveFile('{output_path.replace(chr(39), chr(39)+chr(39))}')",
+                "$voices = $installed | ForEach-Object { $_.VoiceInfo.Name }",
+                "$voiceA = if ($cultureVoice) { $cultureVoice.VoiceInfo.Name } else { ($voices | Where-Object { $_ -match 'David' } | Select-Object -First 1) }",
+                "$voiceB = if ($cultureVoice) { $cultureVoice.VoiceInfo.Name } else { ($voices | Where-Object { $_ -match 'Zira' } | Select-Object -First 1) }",
+                "if (-not $voiceA) { $voiceA = $voices[0] }",
+                "if (-not $voiceB) { $voiceB = $voices[-1] }",
+                "$builder = New-Object System.Speech.Synthesis.PromptBuilder",
+            ]
+        )
         for idx, turn in enumerate(dialogue[:16]):
             speaker = turn.get("speaker", "Alex")
-            # If language is non-English and no native Indic voice is installed, SAPI might skip non-Latin glyphs
-            # unless phonetic_hint or text is provided; we include spoken text + English key terms so SAPI always speaks!
+            # Prefer normalized spoken_text for TTS pronunciation while preserving visual `text` for transcript display
             raw_text = (turn.get("spoken_text") or turn.get("text") or turn.get("narration") or "").replace("'", "''").replace('"', "").replace("\n", " ").strip()
             if not raw_text:
                 continue
@@ -166,9 +197,8 @@ def synthesize_podcast_audio(
         with open(ps_script_path, "w", encoding="utf-8-sig") as f:
             f.write("\n".join(ps_lines))
 
-        subprocess.run(
+        proc = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps_script_path],
-            check=True,
             timeout=45,
             capture_output=True,
         )
@@ -177,7 +207,9 @@ def synthesize_podcast_audio(
         except OSError:
             pass
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 4000:
+        if proc.returncode == 42:
+            sapi_missing_native = True
+        elif proc.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 4000:
             duration_sec = _get_wav_duration(output_path)
             if duration_sec >= 2:
                 return {
@@ -187,11 +219,42 @@ def synthesize_podcast_audio(
                     "duration_seconds": duration_sec,
                     "language": language,
                     "provider": "windows_sapi_neural_dual_voice",
+                    "status": "ready",
+                    "voice_supported": True,
                 }
     except Exception:
         pass
 
-    # 3. Fallback pure-Python WAV generator (guarantees non-empty audible speech cadence)
+    if require_native_voice:
+        if language != "English" or sapi_missing_native:
+            return {
+                "file_name": "",
+                "file_path": "",
+                "audio_url": "",
+                "duration_seconds": 0,
+                "language": language,
+                "provider": "unavailable",
+                "status": "unsupported_tts_language",
+                "voice_supported": False,
+                "error": (
+                    f"Native {language} ({culture}) speech synthesis is unavailable: "
+                    f"no OpenAI TTS key is configured and no local Windows SAPI voice for {culture} is installed. "
+                    "The generated transcript has been preserved."
+                ),
+            }
+        return {
+            "file_name": "",
+            "file_path": "",
+            "audio_url": "",
+            "duration_seconds": 0,
+            "language": language,
+            "provider": "unavailable",
+            "status": "failed",
+            "voice_supported": False,
+            "error": "Audio synthesis failed: neither OpenAI TTS nor local Windows SAPI produced playable speech. Transcript preserved.",
+        }
+
+    # 3. Fallback pure-Python WAV generator (used only when non-strict, e.g. video muxing track)
     duration_sec = _generate_fallback_speech_envelope_wav(output_path, dialogue, target_duration_sec=target_duration_sec)
     return {
         "file_name": wav_filename,
@@ -200,6 +263,8 @@ def synthesize_podcast_audio(
         "duration_seconds": duration_sec,
         "language": language,
         "provider": "local_pcm_synthesizer",
+        "status": "fallback_pcm",
+        "voice_supported": False,
     }
 
 

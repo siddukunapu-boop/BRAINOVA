@@ -27,7 +27,55 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from backend.multilang_engine import localize_studio_output, normalize_language
+from backend.audio_concept_engine import (
+    build_audio_concept_model,
+    build_teaching_sequence,
+    extract_verified_key_takeaways,
+    normalize_spoken_text_for_tts,
+    synthesize_concept_dialogue,
+    validate_cross_output_consistency,
+)
+from backend.studio_engine import (
+    StudioGenerationError,
+    build_domain_neutral_mcq_bank,
+    extract_data_table_grounded,
+    generate_flashcards_grounded,
+    generate_infographic_grounded,
+    generate_mind_map_grounded,
+    generate_slide_deck_grounded,
+    generate_study_guide_grounded,
+    generate_video_storyboard_grounded,
+)
+from backend.doc_processor import (
+    clean_source_sentence_for_narration,
+    clean_spoken_topic_name,
+    is_complete_source_sentence,
+    is_plausible_source_chunk,
+    is_plausible_source_sentence,
+)
+from backend.multilang_engine import (
+    localize_studio_output,
+    normalize_language,
+    validate_script_language,
+    validate_supported_language,
+)
+
+
+class AudioGenerationError(RuntimeError):
+    """Structured error raised when Audio Overview generation cannot produce valid grounded content."""
+
+    def __init__(self, message: str, code: str = "audio_generation_failed", status_code: int = 422):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.status_code = status_code
+
+
+class InsufficientSourceEvidenceError(AudioGenerationError):
+    """Raised when uploaded/retrieved chunks lack enough clean, valid source evidence."""
+
+    def __init__(self, message: str):
+        super().__init__(message, code="insufficient_source_evidence", status_code=422)
 
 
 # ============================================================================
@@ -269,7 +317,7 @@ def call_llm_json(
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
                     resp = client.post(
                         url,
-                        params={"key": api_key},
+                        headers={"x-goog-api-key": api_key},
                         json={
                             "systemInstruction": {"parts": [{"text": guarded_system}]},
                             "contents": [{"role": "user", "parts": [{"text": user_prompt[:24000]}]}],
@@ -896,30 +944,36 @@ def generateTopicReading(
     target_role: str = "Software Engineer",
     user_prefs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    from backend.reading_templates import build_topic_reading_fallback, normalize_diagrams
+
     subs = subtopics or [
-        f"Architectural Fundamentals of {topic_title}",
-        f"Core Implementation Patterns & Execution Mechanics",
-        f"Performance Optimization, Edge Cases & Production Readiness",
-        f"Verification, Security & Debugging Workflows",
+        f"Core Principles of {topic_title}",
+        f"Execution Mechanics in {topic_title}",
+        f"Practical Application & Edge Cases",
     ]
     prereqs = prerequisites or ["Core computing & programming fundamentals"]
 
     prompt = (
-        f"Generate comprehensive, technically rigorous reading material in JSON for topic '{topic_title}' "
+        f"Generate comprehensive, technically accurate, learner-friendly reading material in JSON for topic '{topic_title}' "
         f"in a '{target_role}' curriculum ({difficulty} level).\n"
         f"Description: {topic_description}\n"
         f"Subtopics: {', '.join(subs)}\n"
-        "Return JSON with keys: title, overview, sections (array of {id, heading, level_tag, content, key_takeaway}), "
-        "key_definitions (array of {term, definition, context}), "
-        "code_examples (array of {title, language, code, explanation}), "
-        "comparison_tables (array of {title, headers, rows}), "
-        "common_mistakes (array of {mistake, why_it_happens, fix}), "
-        "interview_questions (array of {question, model_answer}), "
-        "summary, references (array of {title, type, note})."
+        "Return JSON with keys:\n"
+        "- title (string)\n"
+        "- overview (string: clear introduction explaining why this topic matters)\n"
+        "- sections (array of {id, heading, level_tag, content, key_takeaway} covering core concepts step by step, practical examples, and real-world applications)\n"
+        "- diagrams (array of 1-2 topic-specific visual diagrams, each {id, title, type: 'flow'|'architecture'|'process'|'sequence'|'comparison', caption, nodes: [{id, step, label, sublabel, role}]}; nodes MUST accurately model the actual topic such as Call Stack/Web APIs/Microtask Queue/Callback Queue/Event Loop for Event Loop or UNF/1NF/2NF/3NF for Database Normalization)\n"
+        "- key_definitions (array of {term, definition, context})\n"
+        "- code_examples (array of {title, language, code, explanation} — include working code for programming topics or worked examples for conceptual topics)\n"
+        "- comparison_tables (array of {title, headers, rows})\n"
+        "- common_mistakes (array of {mistake, why_it_happens, fix})\n"
+        "- interview_questions (array of {question, model_answer} — practice questions / knowledge check)\n"
+        "- summary (string)\n"
+        "- references (array of {title, type, note})."
     )
 
     llm_data, provider = call_llm_json(
-        "You are a senior staff engineer and university computer science professor authoring rigorous study material.",
+        "You are a senior staff engineer and university computer science professor authoring rigorous, clear study material with accurate visual diagrams.",
         prompt,
         user_prefs=user_prefs,
     )
@@ -934,182 +988,35 @@ def generateTopicReading(
         overview = str(llm_data.get("overview") or topic_description)
         summary = str(llm_data.get("summary") or f"Mastery of {topic_title} requires combining conceptual mental models with deliberate practice.")
         refs = llm_data.get("references") or []
+        diagrams = normalize_diagrams(llm_data.get("diagrams"), topic_title, subs)
     else:
-        overview = (
-            f"{topic_title} is a cornerstone capability for any {target_role}. {topic_description} "
-            f"This guide progresses systematically from foundational mental models through internal execution mechanics, "
-            f"production patterns, trade-off analysis, and examination-ready problem solving."
+        fb = build_topic_reading_fallback(
+            topic_title=topic_title,
+            topic_description=topic_description,
+            subtopics=subs,
+            prerequisites=prereqs,
+            difficulty=difficulty,
+            target_role=target_role,
         )
-        sections = []
-        levels = ["Foundational", "Intermediate", "Advanced", "Production Architecture"]
-        for idx, sub in enumerate(subs):
-            lvl = levels[min(idx, len(levels) - 1)]
-            sections.append(
-                {
-                    "id": f"sec-{idx+1}",
-                    "heading": f"{idx+1}. {sub}",
-                    "level_tag": lvl,
-                    "content": (
-                        f"Understanding **{sub}** begins with recognizing the invariants that govern how data and state flow "
-                        f"through the system. At the {lvl.lower()} level, engineers focus on predictability, explicit contracts, "
-                        f"and minimizing hidden side effects.\n\n"
-                        f"When implementing **{sub}** within **{topic_title}**, always separate data representation from control logic. "
-                        f"First, validate inputs at the boundary so invalid states are unrepresentable. Second, design transformations "
-                        f"to be deterministic and testable in isolation. Third, measure latency and resource utilization under realistic load "
-                        f"rather than optimizing prematurely without empirical profiles."
-                    ),
-                    "key_takeaway": f"Enforce explicit invariants and deterministic behavior across every boundary in {sub}.",
-                }
-            )
-
-        key_defs = [
-            {
-                "term": f"{topic_title} Invariant",
-                "definition": f"A condition within {topic_title} that must remain true before and after every valid state transition or operation.",
-                "context": "Used to verify correctness and prevent corrupted intermediate states.",
-            },
-            {
-                "term": "Idempotency",
-                "definition": "The property where applying an operation multiple times produces the exact same system state as applying it once.",
-                "context": f"Essential for safe retries and fault recovery in {topic_title}.",
-            },
-            {
-                "term": "Separation of Concerns",
-                "definition": "Dividing a software system into distinct modules such that each module addresses a single well-defined responsibility.",
-                "context": "Reduces coupling and enables independent unit testing.",
-            },
-            {
-                "term": "Complexity Bound (Time & Space)",
-                "definition": "Asymptotic characterization of how execution latency and memory allocation scale with input size N.",
-                "context": "Determines whether an implementation survives production scale.",
-            },
-        ]
-
-        code_exs = [
-            {
-                "title": f"Reference Implementation Pattern — {topic_title}",
-                "language": "typescript",
-                "code": (
-                    f"// Production-grade pattern for {topic_title}\n"
-                    f"export interface ExecutionContext<TInput, TResult> {{\n"
-                    f"  readonly requestId: string;\n"
-                    f"  readonly payload: TInput;\n"
-                    f"  validate: (input: TInput) => boolean;\n"
-                    f"  execute: (input: TInput) => Promise<TResult>;\n"
-                    f"}}\n\n"
-                    f"export async function runWithGuard<TInput, TResult>(\n"
-                    f"  ctx: ExecutionContext<TInput, TResult>\n"
-                    f"): Promise<{{ ok: true; data: TResult }} | {{ ok: false; error: string }}> {{\n"
-                    f"  if (!ctx.validate(ctx.payload)) {{\n"
-                    f"    return {{ ok: false, error: `Validation failed for request ${{ctx.requestId}}` }};\n"
-                    f"  }}\n"
-                    f"  try {{\n"
-                    f"    const data = await ctx.execute(ctx.payload);\n"
-                    f"    return {{ ok: true, data }};\n"
-                    f"  }} catch (err) {{\n"
-                    f"    return {{ ok: false, error: err instanceof Error ? err.message : 'Execution error' }};\n"
-                    f"  }}\n"
-                    f"}}"
-                ),
-                "explanation": (
-                    "Demonstrates boundary validation, explicit result unions instead of unhandled exceptions, "
-                    "and clean separation between validation and core execution."
-                ),
-            }
-        ]
-
-        comp_tables = [
-            {
-                "title": f"Architectural Trade-offs in {topic_title}",
-                "headers": ["Approach", "Latency / Throughput", "Complexity", "Best Used When"],
-                "rows": [
-                    ["Synchronous Direct Execution", "Low initial latency, bounded throughput", "Low", "Fast, lightweight operations (< 50ms) with strict immediate feedback"],
-                    ["Asynchronous Queue / Worker Pattern", "High sustained throughput, decoupled latency", "Medium", "Heavy processing, AI generation, or bursty traffic workloads"],
-                    ["Cached / Memoized Read Path", "Sub-millisecond read latency", "Medium-High (invalidation)", "Read-heavy workloads with deterministic or slowly changing outputs"],
-                ],
-            }
-        ]
-
-        mistakes = [
-            {
-                "mistake": "Skipping Boundary Input Validation",
-                "why_it_happens": "Assuming client-side checks or upstream callers always provide well-formed payloads.",
-                "fix": "Validate schemas, types, and ownership permissions server-side on every entry point.",
-            },
-            {
-                "mistake": "Silent Error Swallowing",
-                "why_it_happens": "Using empty catch blocks that hide root causes and leave UI state inconsistent.",
-                "fix": "Return structured error states, log contextual diagnostics, and surface actionable retry controls.",
-            },
-            {
-                "mistake": "Unbounded Resource Consumption",
-                "why_it_happens": "Fetching entire tables without pagination or firing unlimited concurrent requests.",
-                "fix": "Enforce pagination limits, request timeouts, and bounded worker concurrency.",
-            },
-        ]
-
-        interviews = [
-            {
-                "question": f"How do you ensure reliability and correctness when scaling {topic_title} in production?",
-                "model_answer": (
-                    f"First, define strict input/output contracts and enforce idempotency so retries never corrupt state. "
-                    f"Second, isolate stateful side effects behind transactional boundaries. Third, instrument latency percentiles "
-                    f"and error rates alongside deterministic unit and integration tests."
-                ),
-            },
-            {
-                "question": f"What are the primary trade-offs between eager vs. lazy evaluation in {topic_title}?",
-                "model_answer": (
-                    "Eager evaluation computes results upfront, simplifying debugging and making latency predictable on subsequent reads, "
-                    "whereas lazy evaluation defers computation until needed, reducing initial startup cost and memory footprint."
-                ),
-            },
-        ]
-
-        summary = (
-            f"Mastering {topic_title} requires combining strong foundational mental models ({', '.join(subs[:2])}) "
-            f"with disciplined engineering practices: boundary validation, idempotent state transitions, clear trade-off analysis, "
-            f"and automated verification."
-        )
+        overview = fb["overview"]
+        sections = fb["sections"]
+        diagrams = fb["diagrams"]
+        key_defs = fb["key_definitions"]
+        code_exs = fb["code_examples"]
+        comp_tables = fb["comparison_tables"]
+        mistakes = fb["common_mistakes"]
+        interviews = fb["interview_questions"]
+        summary = fb["summary"]
         refs = [
-            {"title": f"Official Specification & Technical Reference — {topic_title}", "type": "Documentation", "note": "Primary specification and API contracts"},
-            {"title": f"Designing Data-Intensive & Resilient Systems ({target_role})", "type": "Engineering Monograph", "note": "Architectural patterns and reliability trade-offs"},
+            {"title": f"Official Documentation & Reference — {topic_title}", "type": "Documentation", "note": "Primary specification and reference"},
         ]
 
-    # Build clean markdown representation as well for full-text search / export
     md_lines = [f"# {topic_title}", "", f"**Difficulty:** {difficulty} | **Prerequisites:** {', '.join(prereqs)}", "", "## Overview", overview, ""]
     for sec in sections:
         md_lines.append(f"## {sec.get('heading', 'Section')}")
         md_lines.append(sec.get("content", ""))
         if sec.get("key_takeaway"):
             md_lines.append(f"\n> **Key Takeaway:** {sec['key_takeaway']}\n")
-
-    diagrams = [
-        {
-            "id": "diag-arch",
-            "title": f"{topic_title} — Core System Architecture & Data Flow",
-            "type": "architecture",
-            "caption": f"End-to-end execution pipeline and validation boundaries for {topic_title}.",
-            "nodes": [
-                {"id": "n1", "step": "01", "label": "Input & Contract Gate", "sublabel": subs[0 % len(subs)], "role": "Schema & boundary validation"},
-                {"id": "n2", "step": "02", "label": "Core Processing Engine", "sublabel": subs[1 % len(subs)], "role": "Deterministic state transformation"},
-                {"id": "n3", "step": "03", "label": "Resilience & Optimization", "sublabel": subs[2 % len(subs)], "role": "Caching, indexing & fault isolation"},
-                {"id": "n4", "step": "04", "label": "Verified Output & Audit", "sublabel": subs[3 % len(subs)], "role": "Transactional persistence & telemetry"},
-            ],
-        },
-        {
-            "id": "diag-lifecycle",
-            "title": f"{topic_title} — Step-by-Step Verification Lifecycle",
-            "type": "process",
-            "caption": "Four-phase engineering cycle from specification to production verification.",
-            "nodes": [
-                {"id": "p1", "step": "Phase A", "label": "Define Invariants", "sublabel": "Explicit types & preconditions", "role": "Design"},
-                {"id": "p2", "step": "Phase B", "label": "Modular Implementation", "sublabel": "Decoupled testable units", "role": "Build"},
-                {"id": "p3", "step": "Phase C", "label": "Edge-Case & Load Test", "sublabel": "Boundary & concurrency checks", "role": "Verify"},
-                {"id": "p4", "step": "Phase D", "label": "Production Observability", "sublabel": "Metrics, logs & safe rollback", "role": "Operate"},
-            ],
-        },
-    ]
 
     return {
         "title": topic_title,
@@ -1395,7 +1302,16 @@ def validate_and_repair_quiz_questions(
     each with exactly 4 distinct non-empty options and a valid correct_index in 0..3.
     Repairs or fills any missing/malformed questions from the deterministic topic bank.
     """
-    fallback_bank = _build_validated_20_mcq_bank(**fallback_kwargs, target_count=required_count)
+    if fallback_kwargs.get("source_passages") is not None:
+        fallback_bank = build_domain_neutral_mcq_bank(
+            topic_title=fallback_kwargs.get("topic_title", "Study Topic"),
+            difficulty=fallback_kwargs.get("difficulty", "Intermediate"),
+            source_passages=fallback_kwargs.get("source_passages") or [],
+            target_count=required_count,
+            is_plausible_chunk_fn=is_plausible_source_chunk,
+        )
+    else:
+        fallback_bank = _build_validated_20_mcq_bank(**fallback_kwargs, target_count=required_count)
     if not isinstance(raw_questions, list):
         return fallback_bank
 
@@ -1607,49 +1523,458 @@ def answerFromSources(
 # ============================================================================
 # 6. ALL NINE AI STUDIO TOOL GENERATORS (Source-Grounded)
 # ============================================================================
-def _extract_source_facts(chunks: List[Dict[str, Any]], fallback_topic: str) -> Tuple[str, List[str], List[Dict[str, Any]]]:
-    """Extracts main topic title, key factual sentences, and source citation metadata from retrieved chunks."""
+_SECTION_STOP_ENDINGS = {
+    "the", "a", "an", "of", "in", "on", "at", "to", "for", "with", "by", "from", "and", "or", "but",
+}
+
+
+def _clean_section_title(raw_sec: Any, fallback: str = "Overview") -> str:
+    sec = re.sub(r"\s+", " ", str(raw_sec or "").strip())
+    if not sec or not is_plausible_source_sentence(sec):
+        return fallback
+    if sec[0].islower():
+        return fallback
+    words = sec.rstrip(".!?।").split()
+    if words and words[-1].lower() in _SECTION_STOP_ENDINGS:
+        return fallback
+    # Reject truncated sentence fragments used as section headers (e.g. clipped at 80 chars)
+    if len(sec) >= 55 and sec[-1] not in ".!?।\"'”’)]":
+        return fallback
+    return sec
+
+
+_META_HANDOUT_RE = re.compile(
+    r"(?:"
+    r"\bplease\s+refer\s+to\s+(?:the\s+)?.*?\b(?:handout|worksheet|appendix|manual|study\s+guide)\b"
+    r"|\bfor\s+(?:further|more|additional)\s+information\b.*\brefer\s+to\b"
+    r"|\bsee\s+(?:the\s+)?(?:attached|accompanying)\s+(?:handout|worksheet|appendix)\b"
+    r"|\bon\s+the\s+(?:next|previous)\s+page\b"
+    r"|\bhttps?://\S+"
+    r")",
+    re.IGNORECASE,
+)
+
+_PROMO_CONTACT_RE = re.compile(
+    r"(?:"
+    r"\(\d{3}\)\s*\d{3}[\s-]*\d{4}"
+    r"|\b\d{3}-\d{3}-\d{4}\b"
+    r"|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+    r"|\boffers\s+free\b.*\b(?:tutoring|appointments|counseling|services)\b"
+    r"|\bfor\s+further\s+assistance\b.*\b(?:call|email|contact)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_VISUAL_POINTER_ONLY_RE = re.compile(
+    r"^(?:"
+    r"the\s+(?:flow\s+)?(?:chart|diagram|figure|table|graph)\s+(?:below|above|on\s+the\s+(?:next|previous)\s+page)\s+"
+    r"(?:shows|depicts|illustrates|summarizes|provides\s+a\s+visual\s+reference)\b"
+    r"|in\s+the\s+(?:flow\s+)?(?:chart|diagram|figure|table|graph)\s+(?:below|above)\s*,"
+    r")",
+    re.IGNORECASE,
+)
+
+_EXPLANATORY_SCIENCE_VERBS_RE = re.compile(
+    r"\b(?:because|since|which\s+means|converts|produces|occurs|takes\s+place|requires|transforms|phosphorylates|oxidizes|reduces|therefore|drives|generates|releases|creates)\b",
+    re.IGNORECASE,
+)
+
+_FINITE_SENTENCE_VERB_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been|has|have|had|can|could|may|might|must|will|would|should|does|do|did|produces|converts|yields|forms|equals|requires|generates|takes|occurs|creates|causes|leads|drives)\b",
+    re.IGNORECASE,
+)
+
+_INLINE_HEADING_SPLIT_RE = re.compile(
+    r"^([A-Z][a-zA-Z0-9-]+(?:\s+(?:and|of|the|in|for|to|&|[A-Z][a-zA-Z0-9-]+)){1,4})\s+"
+    r"((?:Before|When|While|During|After|In|To|The|This|These|It|As|Although|Because|Since|However)\s+[a-z].*)$"
+)
+
+
+def _strip_leading_inline_heading(sentence: str) -> str:
+    """Separates an unpunctuated Title-Case inline section heading from a following sentence."""
+    m = _INLINE_HEADING_SPLIT_RE.match((sentence or "").strip())
+    if not m:
+        return sentence
+    return m.group(2).strip()
+
+
+def _is_non_educational_narration_line(sentence: str) -> bool:
+    """
+    Excludes handout/navigation pointers, institutional tutoring/contact ads,
+    visual-only diagram pointers (without substantive explanation), flattened numerical tables,
+    and incomplete diagram stoichiometry/label fragments.
+    """
+    s = (sentence or "").strip()
+    if not s:
+        return True
+    if _META_HANDOUT_RE.search(s) or _PROMO_CONTACT_RE.search(s):
+        return True
+    if _VISUAL_POINTER_ONLY_RE.match(s) and not _EXPLANATORY_SCIENCE_VERBS_RE.search(s):
+        return True
+    # Detect repeated branding/publisher headers or short verbless title fragments (e.g. "JavaScript Topperworld Topperworld.")
+    if re.search(r"\b([A-Za-z]{4,})\s+\1\b", s, flags=re.IGNORECASE) and not _FINITE_SENTENCE_VERB_RE.search(s):
+        return True
+    if re.search(r"\b(?:topperworld|tutorialspoint|geeksforgeeks|javatpoint|w3schools|all rights reserved|copyright)\b", s, flags=re.IGNORECASE):
+        if not _FINITE_SENTENCE_VERB_RE.search(s) or len(s.split()) <= 8:
+            return True
+    if len(s.split()) <= 4 and not _FINITE_SENTENCE_VERB_RE.search(s):
+        return True
+    # Detect incomplete diagram label / stoichiometry fragments (e.g. "2 x ATP 2 x FADH 2 6 x NADH + H intermembrane space.")
+    if len(re.findall(r"\b\d+\s*x\s*[A-Za-z0-9]+", s)) >= 2 and not _FINITE_SENTENCE_VERB_RE.search(s):
+        return True
+    # Detect flattened numerical table dumps (>= 6 standalone numbers making up >= 20% of tokens)
+    standalone_nums = re.findall(r"\b\d+\b", s)
+    tokens = s.split()
+    if len(standalone_nums) >= 6 and (len(standalone_nums) / max(1, len(tokens))) >= 0.20:
+        return True
+    return False
+
+
+def _find_overlapping_fact_index(norm_key: str, existing_norms: List[str]) -> Optional[int]:
+    """Detects exact, substring, or strong prefix/suffix overlap with previously accepted facts."""
+    cand_words = norm_key.split()
+    for idx, existing in enumerate(existing_norms):
+        if norm_key == existing or norm_key in existing or existing in norm_key:
+            return idx
+        ex_words = existing.split()
+        if len(cand_words) >= 6 and len(ex_words) >= 6:
+            # Check leading prefix overlap or suffix-to-prefix chunk boundary overlap
+            shared_prefix = 0
+            for a, b in zip(cand_words, ex_words):
+                if a == b:
+                    shared_prefix += 1
+                else:
+                    break
+            if shared_prefix >= max(5, int(0.65 * min(len(cand_words), len(ex_words)))):
+                return idx
+    return None
+
+
+def _extract_fact_items(
+    chunks: List[Dict[str, Any]],
+    fallback_topic: str,
+    max_facts: int = 16,
+) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Extracts main topic title, validated fact items with page/section metadata, and deduplicated refs."""
     if not chunks:
-        return (
-            fallback_topic or "Core Study Module",
-            [
-                f"{fallback_topic} establishes structured principles for reliable problem solving and system architecture.",
-                "Breaking complex domains into modular abstractions improves testability and comprehension.",
-                "Validating invariants at system boundaries prevents cascading runtime errors.",
-                "Empirical measurement and spaced assessment reinforce long-term mastery.",
-                "Comparing alternative approaches clarifies latency, maintainability, and scalability trade-offs.",
-                "Structured summaries and active recall accelerate exam and interview preparation.",
-            ],
-            [],
-        )
+        return fallback_topic or "Core Study Module", [], []
 
     primary_title = chunks[0].get("source_title", fallback_topic or "Study Source")
-    sentences: List[str] = []
+    fact_items: List[Dict[str, Any]] = []
+    accepted_norms: List[str] = []
     source_refs: List[Dict[str, Any]] = []
-    seen_sources = set()
+    seen_ref_keys: set = set()
 
     for ch in chunks:
         sid = ch.get("source_id", "")
-        if sid and sid not in seen_sources:
-            seen_sources.add(sid)
+        page_num = ch.get("page_number", 1)
+        clean_sec = _clean_section_title(ch.get("section_title"), f"Page {page_num}")
+        ref_key = (sid, page_num)
+        if sid and ref_key not in seen_ref_keys:
+            seen_ref_keys.add(ref_key)
             source_refs.append(
                 {
                     "source_id": sid,
                     "title": ch.get("source_title", "Source"),
-                    "page_number": ch.get("page_number", 1),
-                    "section_title": ch.get("section_title", "Section 1"),
+                    "page_number": page_num,
+                    "section_title": clean_sec,
                 }
             )
-        raw_sents = re.split(r"(?<=[.!?])\s+", ch.get("content", ""))
+        raw_sents = re.split(r"(?<=[.!?।])\s+", ch.get("content", ""))
         for s in raw_sents:
-            clean_s = s.strip()
-            if 30 <= len(clean_s) <= 240 and clean_s not in sentences:
-                sentences.append(clean_s)
+            clean_s = _strip_leading_inline_heading(clean_source_sentence_for_narration(s))
+            if not (30 <= len(clean_s) <= 380):
+                continue
+            if _is_non_educational_narration_line(clean_s):
+                continue
+            if not is_complete_source_sentence(clean_s):
+                continue
+            norm_key = re.sub(r"\s+", " ", clean_s.lower())
+            overlap_idx = _find_overlapping_fact_index(norm_key, accepted_norms)
+            item = {
+                "text": clean_s,
+                "source_id": sid,
+                "source_title": ch.get("source_title", primary_title),
+                "page_number": page_num,
+                "section_title": clean_sec,
+            }
+            if overlap_idx is not None:
+                if len(clean_s) > len(fact_items[overlap_idx]["text"]):
+                    accepted_norms[overlap_idx] = norm_key
+                    fact_items[overlap_idx] = item
+                continue
+            accepted_norms.append(norm_key)
+            fact_items.append(item)
+
+    return primary_title, fact_items[:max_facts], source_refs
+
+
+def _extract_source_facts(chunks: List[Dict[str, Any]], fallback_topic: str) -> Tuple[str, List[str], List[Dict[str, Any]]]:
+    """Extracts main topic title, validated complete factual sentences, and source citation metadata."""
+    if not chunks:
+        return (
+            fallback_topic or "Core Study Module",
+            [
+                f"{fallback_topic} introduces core concepts, definitions, and foundational context for study.",
+                "Breaking complex topics into structured sub-themes improves comprehension and retention.",
+                "Examining primary evidence and concrete examples clarifies how key principles operate.",
+                "Connecting cause, effect, and historical or technical context deepens understanding.",
+                "Comparing contrasting viewpoints or approaches highlights important trade-offs.",
+                "Structured summaries and active recall reinforce long-term mastery.",
+            ],
+            [],
+        )
+
+    primary_title, fact_items, source_refs = _extract_fact_items(chunks, fallback_topic)
+    sentences = [item["text"] for item in fact_items]
 
     while len(sentences) < 6:
-        sentences.append(f"Key concept from {primary_title} (Section: {chunks[len(sentences) % len(chunks)].get('section_title', 'Overview')}).")
+        safe_sec = _clean_section_title(chunks[len(sentences) % len(chunks)].get("section_title"), "Overview")
+        sentences.append(f"Key concept from {primary_title} (Section: {safe_sec}).")
 
     return primary_title, sentences[:16], source_refs
+
+
+_CLAUSE_LOWER_STARTERS = {
+    "the", "a", "an", "as", "another", "to", "in", "on", "for", "with", "by", "from",
+    "several", "many", "both", "some", "each", "other", "this", "these", "that", "those",
+    "it", "they", "when", "while", "because", "although", "since", "after", "before",
+    "during", "however", "furthermore", "meanwhile", "moreover", "consequently", "therefore",
+}
+
+_TOPIC_TERM_STOPWORDS = _CLAUSE_LOWER_STARTERS | {
+    "are", "was", "were", "been", "being", "have", "has", "had", "does", "did", "can",
+    "could", "would", "should", "will", "shall", "must", "may", "might", "also", "more",
+    "most", "very", "such", "only", "into", "over", "under", "between", "through", "about",
+    "which", "their", "there", "where", "what", "who", "whom", "whose", "than", "then",
+    "here", "well", "even", "much", "make", "made", "take", "taken", "came", "come",
+    "kept", "seen", "used", "using", "called", "known", "time", "part", "form", "way",
+    "first", "second", "third", "new", "old", "high", "low", "major", "important", "key",
+    "central", "problem", "task", "measures", "newly", "emerging", "light",
+}
+
+
+def _as_clause(sentence: str) -> str:
+    """Lowercases initial common determiner/preposition/adverb when embedding after a transition."""
+    s = (sentence or "").strip()
+    if not s:
+        return ""
+    first_word_match = re.match(r"^([A-Za-z]+)(.*)$", s)
+    if not first_word_match:
+        return s
+    first_word, rest = first_word_match.group(1), first_word_match.group(2)
+    if first_word.lower() in _CLAUSE_LOWER_STARTERS and not first_word.isupper():
+        return first_word.lower() + rest
+    return s
+
+
+def _term_stem_key(term: str) -> str:
+    """Computes a lightweight stem key to deduplicate morphological variants (e.g. Germany/German)."""
+    w = re.sub(r"[^a-z0-9]", "", (term or "").lower())
+    return w[:5] if len(w) >= 5 else w
+
+
+def _extract_cluster_focus(cluster: List[Dict[str, Any]], fallback_topic: str) -> str:
+    """Extracts a concise, source-grounded, non-duplicate subject phrase from a cluster of fact items."""
+    text = " ".join(item["text"] for item in cluster)
+    proper_hits: List[str] = []
+    seen_stems: set = set()
+    for m in re.finditer(r"\b([A-Z][a-zA-Z0-9-]{2,}(?:\s+[A-Z][a-zA-Z0-9-]{2,})?)\b", text):
+        phrase = m.group(1).strip()
+        # Skip incidental short mnemonic acronyms (e.g. acronym "OIL RIG") when substantive terms exist
+        if phrase.isupper() and len(phrase) <= 3:
+            ctx_window = text[max(0, m.start() - 25) : min(len(text), m.end() + 25)].lower()
+            if "acronym" in ctx_window or "mnemonic" in ctx_window:
+                continue
+        stem = _term_stem_key(phrase)
+        if phrase.lower() not in _TOPIC_TERM_STOPWORDS and stem not in seen_stems:
+            seen_stems.add(stem)
+            proper_hits.append(phrase)
+
+    content_terms = _extract_salient_terms(text, exclude_stems=seen_stems)
+
+    if len(proper_hits) >= 2:
+        p0, p1 = proper_hits[0], proper_hits[1]
+        is_adj_pair = all(re.search(r"(?:ian|an|ish|ese)$", p) for p in (p0, p1))
+        if is_adj_pair:
+            head_match = re.search(
+                r"\b" + re.escape(p1) + r"(?:,\s*[A-Z][a-zA-Z-]+)*(?:\s+and\s+[A-Z][a-zA-Z-]+)*\s+([a-z]{4,})\b",
+                text,
+            )
+            head_noun = (
+                head_match.group(1)
+                if head_match and head_match.group(1).lower() not in _TOPIC_TERM_STOPWORDS
+                else (content_terms[0] if content_terms else "")
+            )
+            if head_noun:
+                return f"{p0} and {p1} {head_noun}"
+        return f"{p0} and {p1}"
+
+    if len(proper_hits) == 1:
+        p0 = proper_hits[0]
+        if content_terms:
+            if re.search(r"(?:ian|an|ish|ese)$", p0):
+                return f"{p0} {content_terms[0]}"
+            return f"{p0} and {content_terms[0]}"
+        return p0
+
+    if len(content_terms) >= 2:
+        return f"{content_terms[0]} and {content_terms[1]}"
+    if len(content_terms) == 1:
+        return content_terms[0]
+    return fallback_topic
+
+
+def _extract_salient_terms(
+    text: str,
+    exclude: Optional[set] = None,
+    exclude_stems: Optional[set] = None,
+) -> List[str]:
+    excl = exclude or set()
+    excl_stems = set(exclude_stems or set())
+    counts: Dict[str, int] = {}
+    for tok in re.findall(r"\b[a-zA-Z][a-zA-Z0-9-]{3,}\b", text.lower()):
+        stem = _term_stem_key(tok)
+        if tok in _TOPIC_TERM_STOPWORDS or tok in excl or stem in excl_stems:
+            continue
+        counts[tok] = counts.get(tok, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], -len(kv[0])))
+    selected: List[str] = []
+    for w, _ in ranked:
+        stem = _term_stem_key(w)
+        if stem not in excl_stems:
+            excl_stems.add(stem)
+            selected.append(w)
+        if len(selected) >= 4:
+            break
+    return selected
+
+
+def _group_fact_items_thematically(fact_items: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """
+    Groups validated fact items into coherent thematic clusters (2 facts per cluster
+    when possible, up to 4 clusters) using term overlap and page/section proximity.
+    """
+    if len(fact_items) <= 2:
+        return [fact_items]
+
+    clusters: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = [fact_items[0]]
+    current_terms = set(_extract_salient_terms(fact_items[0]["text"]))
+
+    for item in fact_items[1:10]:
+        item_terms = set(_extract_salient_terms(item["text"]))
+        same_page = item.get("page_number") == current[-1].get("page_number")
+        overlap = bool(current_terms & item_terms)
+        if len(current) < 2 and (overlap or same_page):
+            current.append(item)
+            current_terms |= item_terms
+        else:
+            clusters.append(current)
+            if len(clusters) >= 4:
+                current = []
+                break
+            current = [item]
+            current_terms = item_terms
+
+    if current and len(clusters) < 4:
+        clusters.append(current)
+
+    # Merge a trailing 1-item cluster into the previous cluster if it keeps <= 3 items and we have > 2 clusters
+    if len(clusters) > 2 and len(clusters[-1]) == 1 and len(clusters[-2]) <= 2:
+        clusters[-2].extend(clusters.pop())
+
+    return clusters
+
+
+def _format_grounded_cluster_turn(cluster: List[Dict[str, Any]], opener: str, connector: str) -> str:
+    """
+    Formats 1-3 facts into a cohesive spoken turn with accurate per-fact page citations.
+    Never attaches a page number to a claim that the page does not support.
+    """
+    pages = [item.get("page_number") for item in cluster if item.get("page_number") is not None]
+    unique_pages = list(dict.fromkeys(pages))
+
+    if len(cluster) == 1:
+        item = cluster[0]
+        p = item.get("page_number")
+        cite = f"On page {p}, " if p is not None else ""
+        return f"{cite}{opener} {_as_clause(item['text'])}"
+
+    if len(unique_pages) == 1:
+        p = unique_pages[0]
+        parts = [f"On page {p}, {opener} {_as_clause(cluster[0]['text'])}"]
+        for idx, item in enumerate(cluster[1:]):
+            trans = connector if idx == 0 else "In addition,"
+            parts.append(f"{trans} {_as_clause(item['text'])}")
+        return " ".join(parts)
+
+    # Multiple pages in one cluster: cite each fact with its own supporting page
+    parts = []
+    for idx, item in enumerate(cluster):
+        p = item.get("page_number")
+        if idx == 0:
+            prefix = f"On page {p}, {opener}" if p is not None else opener
+        else:
+            prefix = f"{connector} on page {p}," if p is not None else connector
+        parts.append(f"{prefix} {_as_clause(item['text'])}")
+    return " ".join(parts)
+
+
+def _synthesize_offline_audio_dialogue(
+    spoken_topic: str,
+    fact_items: List[Dict[str, Any]],
+    chunks: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, str]]:
+    """
+    Concept-driven, strictly source-grounded two-host dialogue synthesizer.
+    Builds an educational concept model and teaching sequence before generating
+    natural spoken dialogue across any academic subject.
+    """
+    concept_model = build_audio_concept_model(spoken_topic, fact_items, chunks=chunks)
+    teaching_sequence = build_teaching_sequence(concept_model)
+    return synthesize_concept_dialogue(teaching_sequence, concept_model, spoken_topic)
+
+
+_GENERIC_SPOKEN_TOPICS = {
+    "biology", "history", "physics", "chemistry", "mathematics", "math", "science",
+    "notes", "document", "study material", "selected study material", "lecture", "chapter", "handout",
+}
+
+
+def _resolve_spoken_topic(
+    topic_hint: str,
+    topic_name: str,
+    clean_chunks: List[Dict[str, Any]],
+) -> str:
+    if topic_hint:
+        return clean_spoken_topic_name(topic_hint, fallback="Selected Study Material")
+
+    base = clean_spoken_topic_name(topic_name, fallback="Selected Study Material")
+    if base.lower() not in _GENERIC_SPOKEN_TOPICS:
+        return base
+
+    # Prefer a clean, non-generic section heading from the retrieved chunks
+    for ch in clean_chunks[:4]:
+        sec = _clean_section_title(ch.get("section_title"), "")
+        if sec and not re.match(r"^Page\s+\d+$", sec, re.IGNORECASE) and sec.lower() not in _GENERIC_SPOKEN_TOPICS:
+            if 4 <= len(sec) <= 60:
+                return sec
+
+    # Fall back to the strongest 2-word domain phrase in the opening chunk
+    opening = " ".join(str(ch.get("content") or "") for ch in clean_chunks[:2])
+    bigram_counts: Dict[str, int] = {}
+    tokens = re.findall(r"\b[a-zA-Z][a-zA-Z-]{3,}\b", opening.lower())
+    for a, b in zip(tokens, tokens[1:]):
+        if a in _TOPIC_TERM_STOPWORDS or b in _TOPIC_TERM_STOPWORDS:
+            continue
+        bg = f"{a} {b}"
+        bigram_counts[bg] = bigram_counts.get(bg, 0) + 1
+    if bigram_counts:
+        top_bg, count = max(bigram_counts.items(), key=lambda kv: (kv[1], len(kv[0])))
+        if count >= 2:
+            return " ".join(w.capitalize() for w in top_bg.split())
+    return base
 
 
 def generateAudioScript(
@@ -1657,543 +1982,314 @@ def generateAudioScript(
     config: Dict[str, Any],
     user_prefs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    topic_name, facts, refs = _extract_source_facts(chunks, config.get("topic", "Selected Study Sources"))
+    language = validate_supported_language(config.get("language"))
     style = config.get("style", "Deep-Dive Conversational Podcast")
     audience = config.get("audience_level", "Intermediate")
-    language = config.get("language", "English")
     duration_pref = config.get("duration", "Standard (3-5 min)")
 
-    dialogue = [
-        {
-            "speaker": "Alex",
-            "role": "Lead Host",
-            "text": f"Welcome to BRAINOVA Audio Overview! Today we are doing a {style.lower()} on {topic_name}, tailored for an {audience.lower()} audience.",
-        },
-        {
-            "speaker": "Maya",
-            "role": "Technical Co-Host",
-            "text": f"Glad to be here, Alex! We have extracted the core evidence directly from your selected study materials. Right from the opening section, a central takeaway stands out: {facts[0]}",
-        },
-        {
-            "speaker": "Alex",
-            "role": "Lead Host",
-            "text": f"That sets the foundation really clearly. And how does that connect to the next major concept in the material?",
-        },
-        {
-            "speaker": "Maya",
-            "role": "Technical Co-Host",
-            "text": f"Look at how the source builds on it: {facts[1]} Moreover, when we examine the practical implications: {facts[2]}",
-        },
-        {
-            "speaker": "Alex",
-            "role": "Lead Host",
-            "text": f"Students often ask what pitfalls to watch out for when applying this in exams or real projects. What does our source highlight?",
-        },
-        {
-            "speaker": "Maya",
-            "role": "Technical Co-Host",
-            "text": f"Here is the key insight: {facts[3]} And to tie the whole architecture together: {facts[4]}",
-        },
-        {
-            "speaker": "Alex",
-            "role": "Lead Host",
-            "text": f"Let's wrap up with a final synthesis for your revision session: {facts[5]} Keep reviewing your flashcards and take the 20-question assessment in BRAINOVA when you're ready!",
-        },
-    ]
+    clean_chunks = [ch for ch in chunks if is_plausible_source_chunk(ch.get("content", ""))]
+    if not clean_chunks:
+        raise InsufficientSourceEvidenceError(
+            "Insufficient clean source evidence: the retrieved passages are empty or contain unreadable artifacts."
+        )
+
+    topic_hint = str(config.get("topic") or "").strip()
+    topic_name, fact_items, refs = _extract_fact_items(
+        clean_chunks,
+        topic_hint or "Selected Study Sources",
+        max_facts=40,
+    )
+    facts = [item["text"] for item in fact_items]
+    effective_topic = _resolve_spoken_topic(topic_hint, topic_name, clean_chunks)
+    concept_model = build_audio_concept_model(effective_topic, fact_items, chunks=clean_chunks)
+    teaching_sequence = build_teaching_sequence(concept_model)
+
+    provider, api_key, _model = _resolve_active_provider(user_prefs)
+    if language != "English" and (provider == "none" or not api_key):
+        raise AudioGenerationError(
+            f"Generating a source-grounded Audio Overview in {language} requires an active Gemini, OpenAI, or Anthropic API key configured in Settings.",
+            code="llm_required_for_language",
+            status_code=422,
+        )
+    if provider != "none" and api_key:
+        context_blocks: List[str] = []
+        for idx, ch in enumerate(clean_chunks[:10], start=1):
+            sec = _clean_section_title(ch.get("section_title"), f"Page {ch.get('page_number', 1)}")
+            context_blocks.append(
+                f"[Excerpt #{idx} | Source: {ch.get('source_title', 'Source')} | Page {ch.get('page_number', 1)} | {sec}]\n"
+                f"{clean_source_sentence_for_narration(ch.get('content', '').strip())}"
+            )
+
+        source_material = "\n\n".join(context_blocks) if context_blocks else f"Topic: {effective_topic}"
+        system_prompt = (
+            "You are an expert educational podcast scriptwriter. "
+            "Write a natural, insightful, strictly source-grounded two-host educational podcast between "
+            "Alex (Lead Host) and Maya (Subject Expert). "
+            f"Write ALL output fields strictly in {language}. "
+            "Adapt your tone and vocabulary to the actual subject domain of the source material "
+            "(e.g. history, biology, economics, literature, or computer science — never inject unrelated jargon). "
+            "Rules:\n"
+            "1. Every factual claim must be directly supported by <untrusted_source_material>. Never invent external facts or unsupported explanations.\n"
+            "2. Develop clear cause-and-effect explanations, thematic links, and topic-specific host questions rather than stitching raw sentences or asking generic filler questions.\n"
+            "3. Cite supporting page numbers (e.g. 'on page 43') only when that page actually supports the claim.\n"
+            "4. Never paste broken mid-sentence fragments, unclosed quotes, image captions, raw filenames, promotional sign-offs, or obvious OCR typos."
+        )
+        concept_lines = [
+            f"- {c['name']} ({c['pedagogical_role']}, pages {', '.join(str(p) for p in c['pages'])})"
+            for c in concept_model.get("concepts", [])
+        ]
+        gap_lines = [
+            f"- {g['topic']}: {g['reason']}"
+            for g in concept_model.get("coverage_gaps", [])
+        ]
+        caution_lines = [
+            f"- {cau}"
+            for c in concept_model.get("concepts", [])
+            for cau in c.get("cautions", [])
+        ]
+        teaching_notes = ""
+        if concept_lines:
+            teaching_notes += "Concept Teaching Sequence:\n" + "\n".join(concept_lines) + "\n\n"
+        if gap_lines:
+            teaching_notes += "Source Limitations (do NOT fabricate missing mechanisms):\n" + "\n".join(gap_lines) + "\n\n"
+        if caution_lines:
+            teaching_notes += "Scientific/Factual Clarifications:\n" + "\n".join(caution_lines) + "\n\n"
+
+        user_prompt = (
+            f"Create an educational podcast script in {language}.\n"
+            f"Topic Focus: {effective_topic}\n"
+            f"Style: {style} | Audience: {audience} | Target Duration: {duration_pref}\n\n"
+            f"{teaching_notes}"
+            f"<untrusted_source_material>\n{source_material}\n</untrusted_source_material>\n\n"
+            "Return JSON with exact keys:\n"
+            '- "title": concise podcast title in ' + language + "\n"
+            '- "summary": 1-2 sentence overview in ' + language + "\n"
+            '- "dialogue": array of 6 to 10 objects, each with {"speaker": "Alex"|"Maya", "role": string, "text": string} '
+            "forming a coherent arc (Meaningful Intro -> Core Context -> Cause-and-Effect & Evidence -> Educational Conclusion)\n"
+            '- "key_takeaways": array of 4 to 5 concise takeaway strings in ' + language
+        )
+
+        llm_data, used_provider = call_llm_json(system_prompt, user_prompt, user_prefs=user_prefs)
+        if not isinstance(llm_data, dict):
+            raise AudioGenerationError(
+                f"LLM provider '{provider}' failed to return a valid Audio Overview script.",
+                code="llm_generation_failed",
+                status_code=502,
+            )
+
+        raw_dialogue = llm_data.get("dialogue")
+        if not isinstance(raw_dialogue, list) or len(raw_dialogue) < 4:
+            raise AudioGenerationError(
+                "LLM returned an incomplete Audio Overview dialogue (expected at least 4 turns).",
+                code="invalid_llm_dialogue",
+                status_code=502,
+            )
+
+        validated_dialogue: List[Dict[str, str]] = []
+        for idx, turn in enumerate(raw_dialogue):
+            if not isinstance(turn, dict):
+                continue
+            t_text = clean_source_sentence_for_narration(str(turn.get("text") or "").strip())
+            if not t_text or not is_plausible_source_sentence(t_text):
+                continue
+            speaker = str(turn.get("speaker") or ("Alex" if idx % 2 == 0 else "Maya")).strip()
+            role = str(turn.get("role") or ("Lead Host" if idx % 2 == 0 else "Subject Expert")).strip()
+            validated_dialogue.append(
+                {
+                    "speaker": speaker,
+                    "role": role,
+                    "text": t_text,
+                    "spoken_text": normalize_spoken_text_for_tts(t_text) if language == "English" else t_text,
+                }
+            )
+
+        if len(validated_dialogue) < 4:
+            raise AudioGenerationError(
+                "LLM dialogue turns failed source-text quality validation.",
+                code="invalid_llm_dialogue",
+                status_code=502,
+            )
+
+        joined_text = " ".join(t["text"] for t in validated_dialogue)
+        lang_ok, lang_reason = validate_script_language(joined_text, language)
+        if not lang_ok:
+            raise AudioGenerationError(
+                f"Language validation failed for {language}: {lang_reason}",
+                code="language_validation_failed",
+                status_code=422,
+            )
+
+        takeaways = [
+            str(k).strip()
+            for k in (llm_data.get("key_takeaways") or [])
+            if str(k).strip() and is_plausible_source_sentence(str(k).strip())
+        ]
+        verified_takeaways = extract_verified_key_takeaways(concept_model)
+        res = {
+            "title": config.get("title") or str(llm_data.get("title") or f"Audio Overview: {effective_topic}").strip(),
+            "language": language,
+            "duration_target": duration_pref,
+            "audience_level": audience,
+            "style": style,
+            "summary": str(llm_data.get("summary") or f"Source-grounded podcast covering {effective_topic}.").strip(),
+            "dialogue": validated_dialogue,
+            "key_takeaways": takeaways or verified_takeaways or facts[:5],
+            "source_references": refs,
+            "coverage_report": concept_model.get("coverage_gaps", []),
+            "generation_provider": used_provider,
+            "llm_grounded": True,
+        }
+        return localize_studio_output("audio_overview", res, language, topic_hint=effective_topic)
+
+    # Offline concept-driven grounded synthesizer (when no LLM API key is configured)
+    if not fact_items:
+        raise InsufficientSourceEvidenceError(
+            "Insufficient clean, complete source sentences to generate an accurate Audio Overview."
+        )
+
+    dialogue = synthesize_concept_dialogue(teaching_sequence, concept_model, effective_topic)
+    verified_takeaways = extract_verified_key_takeaways(concept_model) or facts[:5]
+    consistency = validate_cross_output_consistency(dialogue, verified_takeaways, concept_model)
+    if not consistency["passed"]:
+        raise AudioGenerationError(
+            "Generated Audio Overview failed cross-output consistency validation: " + "; ".join(consistency["issues"][:3]),
+            code="consistency_validation_failed",
+            status_code=422,
+        )
 
     res = {
-        "title": config.get("title") or f"Audio Overview: {topic_name}",
-        "language": normalize_language(language),
+        "title": config.get("title") or f"Audio Overview: {effective_topic}",
+        "language": language,
         "duration_target": duration_pref,
         "audience_level": audience,
         "style": style,
-        "summary": f"Source-grounded two-host spoken podcast dialogue covering {topic_name}.",
+        "summary": f"Source-grounded two-host spoken podcast dialogue covering {effective_topic}.",
         "dialogue": dialogue,
-        "key_takeaways": facts[:5],
+        "key_takeaways": verified_takeaways,
         "source_references": refs,
+        "coverage_report": concept_model.get("coverage_gaps", []),
+        "generation_provider": "local_structured_engine",
+        "llm_grounded": False,
     }
-    return localize_studio_output("audio_overview", res, language, topic_hint=topic_name)
+    return localize_studio_output("audio_overview", res, language, topic_hint=effective_topic)
 
 
 def generateSlideDeck(
     chunks: List[Dict[str, Any]],
     config: Dict[str, Any],
     user_prefs: Optional[Dict[str, Any]] = None,
+    source_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    topic_name, facts, refs = _extract_source_facts(chunks, config.get("topic", "Study Presentation"))
-    slides = [
-        {
-            "id": "slide-1",
-            "slide_number": 1,
-            "layout": "title_hero",
-            "title": topic_name,
-            "subtitle": f"Source-Grounded Executive & Academic Presentation ({config.get('audience_level', 'Intermediate')})",
-            "bullets": [
-                f"Synthesized from {max(1, len(refs))} verified source document(s)",
-                "Structured for progressive conceptual mastery and rapid revision",
-            ],
-            "example": "Interactive Slide Deck — Use arrow keys or fullscreen mode to present.",
-            "visual_suggestion": "Hero architecture diagram highlighting core module boundaries.",
-            "speaker_notes": f"Introduce the scope and learning objectives of {topic_name}.",
-        },
-        {
-            "id": "slide-2",
-            "slide_number": 2,
-            "layout": "key_concepts",
-            "title": "1. Core Problem Statement & Foundations",
-            "subtitle": "Foundational Principles Extracted from Sources",
-            "bullets": [facts[0], facts[1], "Establishes unambiguous terminology and baseline invariants"],
-            "example": f"Primary source insight: {facts[0][:110]}",
-            "visual_suggestion": "Two-column conceptual model comparing inputs and system invariants.",
-            "speaker_notes": "Emphasize why foundational definitions prevent downstream misconceptions.",
-        },
-        {
-            "id": "slide-3",
-            "slide_number": 3,
-            "layout": "process_flow",
-            "title": "2. Internal Mechanics & Workflow Execution",
-            "subtitle": "Step-by-Step Operational Pipeline",
-            "bullets": [facts[2], facts[3], "Deterministic state transitions with validation checkpoints"],
-            "example": "Input Validation -> Core Transformation -> Verified Persistence",
-            "visual_suggestion": "Horizontal 3-stage pipeline flowchart with validation gates.",
-            "speaker_notes": "Walk through each stage of the pipeline and explain how errors are isolated.",
-        },
-        {
-            "id": "slide-4",
-            "slide_number": 4,
-            "layout": "comparison",
-            "title": "3. Architectural Trade-Offs & Optimization",
-            "subtitle": "Balancing Latency, Reliability, and Complexity",
-            "bullets": [facts[4], "Eager vs. On-Demand execution trade-offs", "Indexing and bounded concurrency for scale"],
-            "example": "Benchmark comparison under realistic workload constraints.",
-            "visual_suggestion": "Trade-off matrix comparing throughput vs. implementation complexity.",
-            "speaker_notes": "Discuss when to prefer simplicity over premature optimization.",
-        },
-        {
-            "id": "slide-5",
-            "slide_number": 5,
-            "layout": "takeaways",
-            "title": "4. Synthesis, Common Pitfalls & Exam Checklist",
-            "subtitle": "Key Review Points Before Assessment",
-            "bullets": [facts[5], "Always verify boundary conditions and edge cases", "Review linked flashcards and complete the 20-MCQ exam"],
-            "example": "Self-check: Can you explain the core invariant in under 60 seconds?",
-            "visual_suggestion": "Summary checklist card with mastery milestones.",
-            "speaker_notes": "Conclude by summarizing the 3 core takeaways and opening Q&A.",
-        },
-    ]
-    language = normalize_language(config.get("language", "English"))
-    res = {
-        "title": config.get("title") or f"Slide Deck: {topic_name}",
-        "language": language,
-        "outline": [s["title"] for s in slides],
-        "slides": slides,
-        "source_references": refs,
-    }
-    return localize_studio_output("slide_deck", res, language, topic_hint=topic_name)
+    return generate_slide_deck_grounded(
+        chunks=chunks,
+        config=config,
+        user_prefs=user_prefs,
+        call_llm_json_fn=call_llm_json,
+        normalize_language_fn=normalize_language,
+        is_plausible_chunk_fn=is_plausible_source_chunk,
+        source_ids=source_ids,
+    )
 
 
 def generateVideoStoryboard(
     chunks: List[Dict[str, Any]],
     config: Dict[str, Any],
     user_prefs: Optional[Dict[str, Any]] = None,
+    source_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    topic_name, facts, refs = _extract_source_facts(chunks, config.get("topic", "Visual Lesson"))
-    language = normalize_language(config.get("language", "English"))
-    duration_label = config.get("duration") or config.get("video_duration") or "3–5 minutes"
-    style_label = config.get("style") or "Concept Breakdown & Architecture"
-
-    # Scale scene durations to match requested duration bracket
-    dur_mult = 1
-    if "5–10" in duration_label or "5-10" in duration_label:
-        dur_mult = 2
-    elif "10–15" in duration_label or "10-15" in duration_label:
-        dur_mult = 3
-
-    scenes = [
-        {
-            "scene_number": 1,
-            "title": f"1. Introduction & Core Foundation: {topic_name}",
-            "duration_sec": 18 * dur_mult,
-            "duration_seconds": 18 * dur_mult,
-            "narration": f"Welcome to this BRAINOVA educational video overview on {topic_name}. {facts[0]}",
-            "caption": f"{topic_name}: Core Foundation & Purpose",
-            "on_screen_text": f"{topic_name} — Foundation & Key Objectives",
-            "visual_direction": "System Architecture Overview Diagram",
-            "visual_description": "Animated title card transitioning into an interactive system overview diagram.",
-            "key_terms": [topic_name, "Core Invariants", "Architecture"],
-            "key_points": [facts[0], facts[1], "Establishes foundational terminology and boundaries"],
-            "diagram_nodes": ["1. Source Input", "2. Core Model", "3. System Invariants", "4. Verified Output"],
-        },
-        {
-            "scene_number": 2,
-            "title": "2. Internal Architecture & Execution Pipeline",
-            "duration_sec": 24 * dur_mult,
-            "duration_seconds": 24 * dur_mult,
-            "narration": f"Let's trace the execution pipeline step by step. {facts[1]} Furthermore, {facts[2]}",
-            "caption": "Step-by-step data flow and validation boundaries",
-            "on_screen_text": "Validation Gate -> Core Processing -> Transactional Storage",
-            "visual_direction": "Data Flow & Validation Pipeline",
-            "visual_description": "Highlighted data packets moving through validation, processing, and storage nodes.",
-            "key_terms": ["Validation Gate", "State Transition", "Pipeline"],
-            "key_points": [facts[1], facts[2], "Deterministic state transitions across modules"],
-            "diagram_nodes": ["1. Boundary Gate", "2. Transform Engine", "3. State Guard", "4. Persistence"],
-        },
-        {
-            "scene_number": 3,
-            "title": "3. Practical Application & Engineering Trade-Offs",
-            "duration_sec": 22 * dur_mult,
-            "duration_seconds": 22 * dur_mult,
-            "narration": f"In real-world engineering scenarios, trade-offs matter. {facts[3]} {facts[4]}",
-            "caption": "Comparing performance, safety, and maintainability",
-            "on_screen_text": f"Optimization & Resilience in {topic_name}",
-            "visual_direction": "Trade-Off Matrix & Performance Chart",
-            "visual_description": "Split-screen comparison chart showing naive vs. optimized implementation behavior.",
-            "key_terms": ["Optimization", "Resilience", "Trade-offs"],
-            "key_points": [facts[3], facts[4], "Balances throughput, latency, and fault isolation"],
-            "diagram_nodes": ["1. Baseline Load", "2. Indexed Lookup", "3. Async Queue", "4. Fault Recovery"],
-        },
-        {
-            "scene_number": 4,
-            "title": "4. Synthesis, Exam Checklist & Key Takeaways",
-            "duration_sec": 18 * dur_mult,
-            "duration_seconds": 18 * dur_mult,
-            "narration": f"To summarize our lesson on {topic_name}: {facts[5]} Review these key takeaways and test your mastery!",
-            "caption": "Key takeaways & assessment readiness",
-            "on_screen_text": "Mastery Summary & Revision Checklist",
-            "visual_direction": "Revision Summary Board",
-            "visual_description": "Summary callout board with three checkmarks and next-step prompts.",
-            "key_terms": ["Mastery Checklist", "20-MCQ Assessment"],
-            "key_points": [facts[5], "Verify boundary conditions and edge cases", "Ready for 20-question mastery exam"],
-            "diagram_nodes": ["1. Concept Mastery", "2. Code Practice", "3. Error Review", "4. Exam Ready"],
-        },
-    ]
-    res = {
-        "title": config.get("title") or f"Video Overview: {topic_name}",
-        "language": language,
-        "duration_label": duration_label,
-        "style_label": style_label,
-        "render_status": "playable_1080p_video_ready",
-        "provider_notice": f"1080p Full HD educational video synthesized in {language} ({duration_label}).",
-        "total_duration_seconds": sum(s["duration_seconds"] for s in scenes),
-        "scenes": scenes,
-        "source_references": refs,
-    }
-    return localize_studio_output("video_overview", res, language, topic_hint=topic_name)
+    return generate_video_storyboard_grounded(
+        chunks=chunks,
+        config=config,
+        user_prefs=user_prefs,
+        call_llm_json_fn=call_llm_json,
+        normalize_language_fn=normalize_language,
+        spoken_normalizer_fn=normalize_spoken_text_for_tts,
+        is_plausible_chunk_fn=is_plausible_source_chunk,
+        source_ids=source_ids,
+    )
 
 
 def generateMindMap(
     chunks: List[Dict[str, Any]],
     config: Dict[str, Any],
     user_prefs: Optional[Dict[str, Any]] = None,
+    source_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    topic_name, facts, refs = _extract_source_facts(chunks, config.get("topic", "Knowledge Graph"))
-    root_node = {
-        "id": "root",
-        "label": topic_name,
-        "category": "root",
-        "details": f"Central knowledge domain synthesized from {max(1, len(refs))} source(s). {facts[0]}",
-        "children": [
-            {
-                "id": "branch-1",
-                "label": "1. Core Concepts & Definitions",
-                "category": "foundation",
-                "details": facts[0],
-                "children": [
-                    {"id": "b1-1", "label": "Primary Abstraction", "category": "leaf", "details": facts[0], "children": []},
-                    {"id": "b1-2", "label": "Boundary Invariants", "category": "leaf", "details": facts[1], "children": []},
-                ],
-            },
-            {
-                "id": "branch-2",
-                "label": "2. Execution & Architecture",
-                "category": "mechanism",
-                "details": facts[2],
-                "children": [
-                    {"id": "b2-1", "label": "Processing Pipeline", "category": "leaf", "details": facts[2], "children": []},
-                    {"id": "b2-2", "label": "State Persistence", "category": "leaf", "details": facts[3], "children": []},
-                ],
-            },
-            {
-                "id": "branch-3",
-                "label": "3. Trade-Offs & Optimization",
-                "category": "optimization",
-                "details": facts[4],
-                "children": [
-                    {"id": "b3-1", "label": "Performance Scaling", "category": "leaf", "details": facts[4], "children": []},
-                    {"id": "b3-2", "label": "Fault Recovery", "category": "leaf", "details": "Bounded retries, idempotency, and safe fallback paths.", "children": []},
-                ],
-            },
-            {
-                "id": "branch-4",
-                "label": "4. Verification & Exam Focus",
-                "category": "verification",
-                "details": facts[5],
-                "children": [
-                    {"id": "b4-1", "label": "Common Pitfalls", "category": "leaf", "details": "Avoid unvalidated inputs and silent error swallowing.", "children": []},
-                    {"id": "b4-2", "label": "Assessment Checkpoints", "category": "leaf", "details": facts[5], "children": []},
-                ],
-            },
-        ],
-    }
-    language = normalize_language(config.get("language", "English"))
-    res = {
-        "title": config.get("title") or f"Mind Map: {topic_name}",
-        "language": language,
-        "root": root_node,
-        "relationships": [
-            {"from": "branch-1", "to": "branch-2", "label": "defines contracts for"},
-            {"from": "branch-2", "to": "branch-3", "label": "optimized via"},
-            {"from": "branch-3", "to": "branch-4", "label": "verified by"},
-        ],
-        "source_references": refs,
-    }
-    return localize_studio_output("mind_map", res, language, topic_hint=topic_name)
+    return generate_mind_map_grounded(
+        chunks=chunks,
+        config=config,
+        user_prefs=user_prefs,
+        call_llm_json_fn=call_llm_json,
+        normalize_language_fn=normalize_language,
+        is_plausible_chunk_fn=is_plausible_source_chunk,
+        source_ids=source_ids,
+    )
 
 
 def generateStudyGuide(
     chunks: List[Dict[str, Any]],
     config: Dict[str, Any],
     user_prefs: Optional[Dict[str, Any]] = None,
+    source_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    topic_name, facts, refs = _extract_source_facts(chunks, config.get("topic", "Comprehensive Study Guide"))
-    language = normalize_language(config.get("language", "English"))
-    reading = generateTopicReading(
-        topic_title=topic_name,
-        topic_description=" ".join(facts[:3]),
-        subtopics=[
-            "Foundational Concepts & Source Evidence",
-            "System Mechanics & Step-by-Step Analysis",
-            "Applied Patterns, Formulas & Code Examples",
-            "Comparative Synthesis & Exam Preparation",
-        ],
-        difficulty=config.get("audience_level", "Intermediate"),
+    return generate_study_guide_grounded(
+        chunks=chunks,
+        config=config,
         user_prefs=user_prefs,
+        call_llm_json_fn=call_llm_json,
+        normalize_language_fn=normalize_language,
+        is_plausible_chunk_fn=is_plausible_source_chunk,
+        source_ids=source_ids,
     )
-    res = {
-        "title": config.get("title") or f"Study Guide & Report: {topic_name}",
-        "language": language,
-        "overview": reading["overview"],
-        "learning_objectives": [
-            f"Synthesize core evidence from {topic_name}",
-            "Master key terminology, formulas, and implementation examples",
-            "Identify common pitfalls and answer synthesis practice questions",
-        ],
-        "sections": reading["sections"],
-        "diagrams": reading.get("diagrams", []),
-        "terminology": reading["key_definitions"],
-        "code_and_formulas": reading["code_examples"],
-        "comparison_tables": reading["comparison_tables"],
-        "common_mistakes": reading["common_mistakes"],
-        "practice_questions": reading["interview_questions"],
-        "summary": reading["summary"],
-        "source_references": refs or reading["references"],
-    }
-    return localize_studio_output("study_guide", res, language, topic_hint=topic_name)
 
 
 def generateFlashcards(
     chunks: List[Dict[str, Any]],
     config: Dict[str, Any],
     user_prefs: Optional[Dict[str, Any]] = None,
+    source_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    topic_name, facts, refs = _extract_source_facts(chunks, config.get("topic", "Core Concept Deck"))
-    count = max(6, min(25, int(config.get("card_count", 10))))
-
-    base_cards = [
-        {
-            "front": f"What is the primary foundational insight regarding {topic_name}?",
-            "back": facts[0],
-            "hint": "Think about the opening section of your study source.",
-            "category": "Core Concept",
-        },
-        {
-            "front": f"How does {topic_name} maintain reliability across state transitions?",
-            "back": f"{facts[1]} It enforces explicit validation at system boundaries and preserves invariants.",
-            "hint": "Focus on boundary validation and invariants.",
-            "category": "Architecture",
-        },
-        {
-            "front": f"What operational mechanism is highlighted in the source material for {topic_name}?",
-            "back": facts[2],
-            "hint": "Consider the step-by-step execution pipeline.",
-            "category": "Mechanics",
-        },
-        {
-            "front": f"Why is idempotency important when retrying operations in {topic_name}?",
-            "back": "Idempotency guarantees that repeating an operation with the same parameters produces the same state without creating duplicate records or side effects.",
-            "hint": "Safe retries without duplication.",
-            "category": "Reliability",
-        },
-        {
-            "front": f"What key practical consideration or insight does the source emphasize for {topic_name}?",
-            "back": facts[3],
-            "hint": "Relates to practical implementation and error prevention.",
-            "category": "Application",
-        },
-        {
-            "front": f"How do you prevent stale asynchronous responses from overwriting newer user edits?",
-            "back": "Track version counters or edit flags, cancel superseded requests with AbortController, and prompt before overwriting modified content.",
-            "hint": "Concurrency & edit protection.",
-            "category": "Concurrency",
-        },
-        {
-            "front": f"What architectural synthesis connects the components of {topic_name}?",
-            "back": facts[4],
-            "hint": "How the modules fit together.",
-            "category": "Synthesis",
-        },
-        {
-            "front": f"What is the difference between authentication and authorization?",
-            "back": "Authentication verifies who the user is (identity), while authorization verifies whether that authenticated user has permission to access or modify a specific resource (ownership/roles).",
-            "hint": "Identity vs. Permission.",
-            "category": "Security",
-        },
-        {
-            "front": f"What final takeaway from {topic_name} is critical for examination readiness?",
-            "back": facts[5],
-            "hint": "Summary conclusion from the material.",
-            "category": "Exam Prep",
-        },
-        {
-            "front": f"Why should expensive generation tasks use a background job queue rather than a single blocking HTTP request?",
-            "back": "Background job queues keep the UI responsive, enforce concurrency limits, persist progress across refreshes, and allow retrying individual failed jobs without losing completed ones.",
-            "hint": "Responsiveness and fault isolation.",
-            "category": "Systems Design",
-        },
-    ]
-
-    cards = []
-    for i in range(count):
-        template = base_cards[i % len(base_cards)]
-        cards.append(
-            {
-                "front": template["front"] if i < len(base_cards) else f"[Review #{i+1}] {template['front']}",
-                "back": template["back"],
-                "hint": template["hint"],
-                "category": template["category"],
-            }
-        )
-
-    language = normalize_language(config.get("language", "English"))
-    res = {
-        "title": config.get("title") or f"Flashcard Deck: {topic_name}",
-        "language": language,
-        "description": f"{len(cards)} active-recall flashcards grounded in {topic_name}.",
-        "cards": cards,
-        "source_references": refs,
-    }
-    return localize_studio_output("flashcards", res, language, topic_hint=topic_name)
+    return generate_flashcards_grounded(
+        chunks=chunks,
+        config=config,
+        user_prefs=user_prefs,
+        call_llm_json_fn=call_llm_json,
+        normalize_language_fn=normalize_language,
+        is_plausible_chunk_fn=is_plausible_source_chunk,
+        source_ids=source_ids,
+    )
 
 
 def generateInfographicStructure(
     chunks: List[Dict[str, Any]],
     config: Dict[str, Any],
     user_prefs: Optional[Dict[str, Any]] = None,
+    source_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    topic_name, facts, refs = _extract_source_facts(chunks, config.get("topic", "Visual Summary"))
-    language = normalize_language(config.get("language", "English"))
-    res = {
-        "title": config.get("title") or f"Infographic: {topic_name}",
-        "language": language,
-        "subtitle": "Structured Visual Synthesis & Key Metrics",
-        "theme_accent": "#38bdf8",
-        "hero_stat_cards": [
-            {"value": f"{max(1, len(refs))}", "label": "Grounded Sources", "detail": "Verified extracted passages"},
-            {"value": "4 Stages", "label": "Core Lifecycle", "detail": "Validate -> Process -> Persist -> Verify"},
-            {"value": "100%", "label": "Schema Validated", "detail": "Deterministic structural integrity"},
-            {"value": "70%+", "label": "Mastery Threshold", "detail": "14/20 MCQ benchmark target"},
-        ],
-        "visual_sections": [
-            {
-                "step": "01",
-                "title": "Foundational Premise",
-                "summary": facts[0],
-                "badge": "Core Concept",
-            },
-            {
-                "step": "02",
-                "title": "Execution Architecture",
-                "summary": facts[1],
-                "badge": "Mechanism",
-            },
-            {
-                "step": "03",
-                "title": "Operational Safeguards",
-                "summary": facts[2],
-                "badge": "Resilience",
-            },
-            {
-                "step": "04",
-                "title": "Optimization & Synthesis",
-                "summary": facts[3],
-                "badge": "Mastery",
-            },
-        ],
-        "comparison_callout": {
-            "left_title": "Unstructured Ad-Hoc Approach",
-            "left_points": [
-                "Unvalidated inputs cause cascading runtime failures",
-                "Blocking synchronous execution freezes user experience",
-                "Silent overwrites erase personal notes and edits",
-            ],
-            "right_title": f"Structured {topic_name} Architecture",
-            "right_points": [
-                "Strict boundary validation & ownership enforcement",
-                "Asynchronous job queue with granular retry controls",
-                "Non-destructive versioning & citation traceability",
-            ],
-        },
-        "footer_takeaway": facts[4],
-        "source_references": refs,
-    }
-    return localize_studio_output("infographic", res, language, topic_hint=topic_name)
+    return generate_infographic_grounded(
+        chunks=chunks,
+        config=config,
+        user_prefs=user_prefs,
+        call_llm_json_fn=call_llm_json,
+        normalize_language_fn=normalize_language,
+        is_plausible_chunk_fn=is_plausible_source_chunk,
+        source_ids=source_ids,
+    )
 
 
 def extractStructuredTable(
     chunks: List[Dict[str, Any]],
     config: Dict[str, Any],
     user_prefs: Optional[Dict[str, Any]] = None,
+    source_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    topic_name, facts, refs = _extract_source_facts(chunks, config.get("topic", "Structured Extraction"))
-    language = normalize_language(config.get("language", "English"))
-    extraction_type = config.get("extraction_type", "Concept Comparisons & Definitions")
-    instructions = config.get("instructions", "").strip()
-
-    columns = ["Concept / Element", "Category", "Definition & Core Role", "Practical Application / Formula", "Confidence / Source Status"]
-    rows = []
-    categories = ["Foundation", "Mechanism", "Architecture", "Optimization", "Security & Verification", "Synthesis"]
-    for idx, fact in enumerate(facts[:8], start=1):
-        src_label = (
-            f"Verified ({refs[idx % len(refs)]['title']}, p.{refs[idx % len(refs)]['page_number']})"
-            if refs
-            else "Synthesized from curriculum baseline (No external document uploaded)"
-        )
-        rows.append(
-            {
-                "id": f"row-{idx}",
-                "cells": [
-                    f"{topic_name} — Element #{idx}",
-                    categories[(idx - 1) % len(categories)],
-                    fact,
-                    instructions or f"Applied in {categories[(idx - 1) % len(categories)].lower()} workflows & verification",
-                    src_label,
-                ],
-            }
-        )
-
-    res = {
-        "title": config.get("title") or f"Data Table: {topic_name} ({extraction_type})",
-        "language": language,
-        "extraction_type": extraction_type,
-        "instructions": instructions or "Extract key concepts, definitions, applications, and source verification status.",
-        "columns": columns,
-        "rows": rows,
-        "missing_data_notes": (
-            "All rows extracted from uploaded sources with page references."
-            if refs
-            else "Note: No source documents were selected; table rows reflect domain curriculum baseline rather than document extraction."
-        ),
-        "source_references": refs,
-    }
-    return localize_studio_output("data_table", res, language, topic_hint=topic_name)
+    return extract_data_table_grounded(
+        chunks=chunks,
+        config=config,
+        user_prefs=user_prefs,
+        call_llm_json_fn=call_llm_json,
+        normalize_language_fn=normalize_language,
+        is_plausible_chunk_fn=is_plausible_source_chunk,
+        source_ids=source_ids,
+    )
 

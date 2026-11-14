@@ -4,7 +4,6 @@ import {
   BookMarked,
   FileText,
   Video,
-  Sparkles,
   Plus,
   Trash2,
   Edit3,
@@ -20,14 +19,13 @@ export const ResourcesPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [activeCategory, setActiveCategory] = useState<
-    'notes' | 'tutorials' | 'readings' | 'studio'
+    'notes' | 'tutorials' | 'readings'
   >('notes');
   const [searchQuery, setSearchQuery] = useState('');
   const [data, setData] = useState<any>({
     notes: [],
     tutorials: [],
     readings: [],
-    studio_outputs: [],
   });
   const [loading, setLoading] = useState(true);
 
@@ -104,16 +102,6 @@ export const ResourcesPage: React.FC = () => {
     }
   };
 
-  const handleDeleteStudioOutput = async (outId: string) => {
-    try {
-      await apiRequest(`/api/studio/outputs/${outId}`, { method: 'DELETE' });
-      addToast('Deleted AI Studio output.', 'info');
-      loadResources();
-    } catch (err: any) {
-      addToast(err.message || 'Delete failed.', 'error');
-    }
-  };
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       <div
@@ -132,8 +120,8 @@ export const ResourcesPage: React.FC = () => {
           </span>
           <h1 style={{ fontSize: '1.65rem' }}>My Learning Resources</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem' }}>
-            Manage all your personal notes, saved video tutorials, generated topic reading guides,
-            and AI Studio outputs in one place.
+            Manage all your personal notes, saved video tutorials, and generated topic reading guides
+            in one place.
           </p>
         </div>
 
@@ -187,14 +175,6 @@ export const ResourcesPage: React.FC = () => {
             >
               <BookMarked size={15} />
               <span>Reading Materials ({data.readings?.length || 0})</span>
-            </button>
-            <button
-              type="button"
-              className={`tab-btn ${activeCategory === 'studio' ? 'active' : ''}`}
-              onClick={() => setActiveCategory('studio')}
-            >
-              <Sparkles size={15} />
-              <span>AI Studio Library ({data.studio_outputs?.length || 0})</span>
             </button>
           </div>
 
@@ -362,7 +342,7 @@ export const ResourcesPage: React.FC = () => {
               ))}
             </div>
           )
-        ) : activeCategory === 'readings' ? (
+        ) : (
           (data.readings || []).length === 0 ? (
             <p style={{ color: 'var(--text-muted)', padding: '20px 0' }}>
               No topic reading materials generated yet.
@@ -416,49 +396,6 @@ export const ResourcesPage: React.FC = () => {
               ))}
             </div>
           )
-        ) : (
-          <div className="grid-2">
-            {(data.studio_outputs || []).map((out: any) => (
-              <div
-                key={out.id}
-                style={{
-                  padding: '16px',
-                  borderRadius: '12px',
-                  background: 'var(--bg-charcoal)',
-                  border: '1px solid var(--border-subtle)',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <div>
-                  <span className="badge badge-violet" style={{ marginBottom: 4 }}>
-                    {out.tool_type.replace(/_/g, ' ').toUpperCase()}
-                  </span>
-                  <h3 style={{ fontSize: '1rem' }}>{out.title}</h3>
-                  <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                    {new Date(out.created_at).toLocaleDateString()}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => navigate(`/studio-library?open=${out.id}`)}
-                  >
-                    Open in Library
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    onClick={() => handleDeleteStudioOutput(out.id)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
         )}
       </div>
 

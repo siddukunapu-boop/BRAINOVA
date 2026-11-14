@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
-import { Save, ShieldCheck, Key, User, Sliders, Palette, Upload, Check } from 'lucide-react';
+import { Save, User, Sliders, Palette, Upload, Check } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp, BRAINOVA_THEMES, BrainovaTheme } from '../context/AppContext';
 
 export const SettingsPage: React.FC = () => {
   const { user, theme, setTheme, refreshUser, addToast } = useApp();
   const prefs = user?.preferences;
-  const credStatus = prefs?.credentials_status;
 
   // Profile States (Part 11)
   const [name, setName] = useState(user?.name || '');
@@ -15,23 +14,12 @@ export const SettingsPage: React.FC = () => {
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || '');
   const [savingProfile, setSavingProfile] = useState(false);
 
-  // Preferences & AI Provider Key States
-  const [aiProvider, setAiProvider] = useState(prefs?.ai_provider || 'auto');
-  const [geminiKey, setGeminiKey] = useState('');
-  const [geminiModel, setGeminiModel] = useState(prefs?.gemini_model || 'gemini-2.5-flash');
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [openaiModel, setOpenaiModel] = useState(prefs?.openai_model || 'gpt-4o-mini');
-  const [anthropicKey, setAnthropicKey] = useState('');
-  const [youtubeKey, setYoutubeKey] = useState('');
-  const [videoKey, setVideoKey] = useState('');
 
   const [preferredLanguage, setPreferredLanguage] = useState(
     prefs?.preferred_language || 'English'
   );
   const [defaultSkill, setDefaultSkill] = useState(prefs?.default_skill_level || 'Intermediate');
   const [hoursPerWeek, setHoursPerWeek] = useState(prefs?.study_hours_per_week || 12);
-  const [showDemoData, setShowDemoData] = useState(Boolean(prefs?.show_demo_data));
-  const [reducedMotion, setReducedMotion] = useState(Boolean(prefs?.reduced_motion));
   const [savingPrefs, setSavingPrefs] = useState(false);
 
   // Convert uploaded avatar file into a compact data URL
@@ -78,33 +66,18 @@ export const SettingsPage: React.FC = () => {
     setSavingPrefs(true);
     try {
       const payload: Record<string, any> = {
-        ai_provider: aiProvider,
-        gemini_model: geminiModel,
-        openai_model: openaiModel,
         default_skill_level: defaultSkill,
         study_hours_per_week: Number(hoursPerWeek) || 12,
-        show_demo_data: showDemoData,
-        reduced_motion: reducedMotion,
         theme,
         preferred_language: preferredLanguage,
       };
-      if (geminiKey.trim()) payload.gemini_api_key = geminiKey.trim();
-      if (openaiKey.trim()) payload.openai_api_key = openaiKey.trim();
-      if (anthropicKey.trim()) payload.anthropic_api_key = anthropicKey.trim();
-      if (youtubeKey.trim()) payload.youtube_api_key = youtubeKey.trim();
-      if (videoKey.trim()) payload.video_provider_key = videoKey.trim();
 
       await apiRequest('/api/settings/preferences', {
         method: 'PUT',
         body: JSON.stringify(payload),
       });
-      setGeminiKey('');
-      setOpenaiKey('');
-      setAnthropicKey('');
-      setYoutubeKey('');
-      setVideoKey('');
       await refreshUser();
-      addToast('Saved AI provider, language & theme preferences!', 'success');
+      addToast('Saved language & theme preferences!', 'success');
     } catch (err: any) {
       addToast(err.message || 'Preferences update failed.', 'error');
     } finally {
@@ -123,14 +96,14 @@ export const SettingsPage: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       <div className="card card-elevated">
         <span className="badge badge-indigo" style={{ marginBottom: '6px' }}>
-          BRAINOVA PROFILE, THEME & AI CONFIGURATION
+          BRAINOVA PROFILE & THEME SETTINGS
         </span>
         <h1 style={{ fontSize: '1.65rem', marginBottom: '6px' }}>
-          Profile Settings, Four-Theme System & AI Integrations
+          Profile Settings & Theme Preferences
         </h1>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem' }}>
           Personalize your learner profile and avatar, switch between the 4 BRAINOVA visual themes,
-          choose your default Indian/Global output language, and manage server-side AI credentials.
+          and choose your default Indian/Global output language.
         </p>
       </div>
 
@@ -189,7 +162,7 @@ export const SettingsPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid-2" style={{ alignItems: 'start' }}>
+      <div>
         {/* Left: Learner Profile & Avatar Settings (Part 11) */}
         <div className="card">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
@@ -333,7 +306,7 @@ export const SettingsPage: React.FC = () => {
 
           <div className="grid-2">
             <div className="form-group">
-              <label className="form-label">Default AI Studio Language</label>
+              <label className="form-label">Default Learning Language</label>
               <select
                 className="form-select"
                 value={preferredLanguage}
@@ -374,26 +347,6 @@ export const SettingsPage: React.FC = () => {
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '18px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '0.9rem' }}>
-              <input
-                type="checkbox"
-                checked={reducedMotion}
-                onChange={(e) => setReducedMotion(e.target.checked)}
-              />
-              <span>Enable Reduced Motion (Disable non-essential UI animations)</span>
-            </label>
-
-            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '0.9rem' }}>
-              <input
-                type="checkbox"
-                checked={showDemoData}
-                onChange={(e) => setShowDemoData(e.target.checked)}
-              />
-              <span>Show Isolated Demonstration Banner on Dashboard</span>
-            </label>
-          </div>
-
           <button
             type="button"
             className="btn btn-primary"
@@ -405,138 +358,6 @@ export const SettingsPage: React.FC = () => {
           </button>
         </div>
 
-        {/* Right: AI Integration & External Credentials Boundary */}
-        <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-            <Key size={18} color="var(--status-success)" />
-            <h2 style={{ fontSize: '1.2rem' }}>AI Providers & External Service Credentials</h2>
-          </div>
-
-          <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-            API keys entered here are saved in your server-side database record and are never
-            returned to the browser after saving.
-          </p>
-
-          <div
-            style={{
-              padding: '14px',
-              borderRadius: '10px',
-              background: 'var(--bg-charcoal)',
-              border: '1px solid var(--border-subtle)',
-              marginBottom: '18px',
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: '8px',
-            }}
-          >
-            <span
-              className={`badge ${
-                credStatus?.gemini_configured ? 'badge-success' : 'badge-indigo'
-              }`}
-            >
-              Gemini API: {credStatus?.gemini_configured ? 'Configured' : 'Using Local Engine'}
-            </span>
-            <span
-              className={`badge ${
-                credStatus?.openai_configured ? 'badge-success' : 'badge-indigo'
-              }`}
-            >
-              OpenAI API: {credStatus?.openai_configured ? 'Configured' : 'Not Set'}
-            </span>
-            <span className="badge badge-success">
-              1080p HD Video & 6-Language WAV Engine: Active
-            </span>
-            <span
-              className={`badge ${
-                credStatus?.youtube_api_configured ? 'badge-success' : 'badge-blue'
-              }`}
-            >
-              YouTube Tutorial Catalog + oEmbed: Active
-            </span>
-          </div>
-
-          <form onSubmit={handleSavePreferences}>
-            <div className="form-group">
-              <label className="form-label">Preferred AI Provider</label>
-              <select
-                className="form-select"
-                value={aiProvider}
-                onChange={(e) => setAiProvider(e.target.value)}
-              >
-                <option value="auto">Auto-Detect Configured Provider (Recommended)</option>
-                <option value="gemini">Google Gemini ({geminiModel})</option>
-                <option value="openai">OpenAI ({openaiModel})</option>
-                <option value="anthropic">Anthropic Claude</option>
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Google Gemini API Key (GEMINI_API_KEY)</label>
-              <input
-                type="password"
-                className="form-input"
-                placeholder={
-                  credStatus?.gemini_configured
-                    ? '•••••••••••••••• (Configured — enter new key to update)'
-                    : 'AIzaSy...'
-                }
-                value={geminiKey}
-                onChange={(e) => setGeminiKey(e.target.value)}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">OpenAI API Key (OPENAI_API_KEY)</label>
-              <input
-                type="password"
-                className="form-input"
-                placeholder={
-                  credStatus?.openai_configured
-                    ? '•••••••••••••••• (Configured — enter new key to update)'
-                    : 'sk-...'
-                }
-                value={openaiKey}
-                onChange={(e) => setOpenaiKey(e.target.value)}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Anthropic API Key (ANTHROPIC_API_KEY)</label>
-              <input
-                type="password"
-                className="form-input"
-                placeholder="sk-ant-..."
-                value={anthropicKey}
-                onChange={(e) => setAnthropicKey(e.target.value)}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">
-                YouTube Data API v3 Key (Optional — for live search expansion)
-              </label>
-              <input
-                type="password"
-                className="form-input"
-                placeholder="AIzaSy..."
-                value={youtubeKey}
-                onChange={(e) => setYoutubeKey(e.target.value)}
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ width: '100%' }}
-              disabled={savingPrefs}
-            >
-              <ShieldCheck size={16} />
-              <span>
-                {savingPrefs ? 'Encrypting & Saving...' : 'Save AI Integration Credentials'}
-              </span>
-            </button>
-          </form>
-        </div>
       </div>
     </div>
   );

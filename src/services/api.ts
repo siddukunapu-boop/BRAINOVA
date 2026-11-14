@@ -18,10 +18,41 @@ export function setStoredToken(token: string | null): void {
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
+}
+
+export function extractApiError(
+  data: unknown,
+  status: number
+): { message: string; code?: string } {
+  const fallback = `Request failed (${status})`;
+  if (!data || typeof data !== 'object') {
+    return { message: fallback };
+  }
+  const record = data as Record<string, unknown>;
+  const detail = record.detail;
+  if (typeof detail === 'string' && detail.trim()) {
+    return { message: detail };
+  }
+  if (detail && typeof detail === 'object') {
+    const detailObj = detail as Record<string, unknown>;
+    const code = typeof detailObj.code === 'string' ? detailObj.code : undefined;
+    const message =
+      typeof detailObj.message === 'string' && detailObj.message.trim()
+        ? detailObj.message
+        : fallback;
+    return { message, code };
+  }
+  if (typeof record.message === 'string' && record.message.trim()) {
+    const code = typeof record.code === 'string' ? record.code : undefined;
+    return { message: record.message, code };
+  }
+  return { message: fallback };
 }
 
 export async function apiRequest<T = any>(
@@ -51,19 +82,16 @@ export async function apiRequest<T = any>(
   }
 
   if (!response.ok) {
-    let errorDetail = `Request failed (${response.status})`;
+    let parsed: { message: string; code?: string } = {
+      message: `Request failed (${response.status})`,
+    };
     try {
       const data = await response.json();
-      if (data && data.detail) {
-        errorDetail =
-          typeof data.detail === 'string'
-            ? data.detail
-            : JSON.stringify(data.detail);
-      }
+      parsed = extractApiError(data, response.status);
     } catch {
       // ignore json parse error
     }
-    throw new ApiError(errorDetail, response.status);
+    throw new ApiError(parsed.message, response.status, parsed.code);
   }
 
   return response.json() as Promise<T>;

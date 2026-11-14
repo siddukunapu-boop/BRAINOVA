@@ -381,6 +381,146 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_logs(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    jti TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    revoked_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_exp ON revoked_tokens(expires_at);
+
+CREATE TABLE IF NOT EXISTS diary_entries (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    entry_date TEXT NOT NULL,
+    pages_json TEXT NOT NULL DEFAULT '[""]',
+    is_draft INTEGER NOT NULL DEFAULT 0,
+    client_draft_key TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary_entries(user_id, is_draft, entry_date DESC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS study_journal_entries (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL DEFAULT '',
+    chapter_or_module TEXT NOT NULL DEFAULT '',
+    study_date TEXT NOT NULL,
+    duration_minutes INTEGER NOT NULL DEFAULT 0,
+    learning_status TEXT NOT NULL DEFAULT 'understood',
+    key_concepts TEXT NOT NULL DEFAULT '',
+    learning_outcomes TEXT NOT NULL DEFAULT '',
+    revision_notes TEXT NOT NULL DEFAULT '',
+    pages_json TEXT NOT NULL DEFAULT '[{"type":"doc","blocks":[{"type":"paragraph","runs":[]}]}]',
+    is_draft INTEGER NOT NULL DEFAULT 0,
+    client_draft_key TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_journal_user_date ON study_journal_entries(user_id, is_draft, study_date DESC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS focus_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_title TEXT NOT NULL DEFAULT '',
+    duration_seconds INTEGER NOT NULL,
+    short_break_minutes INTEGER NOT NULL DEFAULT 0,
+    sound_enabled INTEGER NOT NULL DEFAULT 1,
+    animations_enabled INTEGER NOT NULL DEFAULT 1,
+    started_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    distraction_event_count INTEGER NOT NULL DEFAULT 0,
+    client_request_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_user_status ON focus_sessions(user_id, status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_client_req ON focus_sessions(user_id, client_request_id);
+
+CREATE TABLE IF NOT EXISTS focus_events (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES focus_sessions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_focus_events_session ON focus_events(session_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_focus_events_user ON focus_events(user_id, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS pending_registrations (
+    id TEXT PRIMARY KEY,
+    pending_token TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    target_role TEXT NOT NULL DEFAULT 'Full Stack Developer',
+    otp_hmac TEXT NOT NULL,
+    otp_expires_at TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    resend_count INTEGER NOT NULL DEFAULT 0,
+    resend_window_start TEXT NOT NULL,
+    last_sent_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_reg_token ON pending_registrations(pending_token);
+CREATE INDEX IF NOT EXISTS idx_pending_reg_expires ON pending_registrations(otp_expires_at);
+
+CREATE TABLE IF NOT EXISTS registration_rate_limits (
+    rate_key TEXT PRIMARY KEY,
+    window_start TEXT NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS email_delivery_logs (
+    id TEXT PRIMARY KEY,
+    correlation_id TEXT UNIQUE NOT NULL,
+    provider_message_id TEXT NOT NULL DEFAULT '',
+    recipient_domain TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    status TEXT NOT NULL,
+    smtp_code INTEGER,
+    connect_duration_ms REAL NOT NULL DEFAULT 0,
+    submit_duration_ms REAL NOT NULL DEFAULT 0,
+    total_duration_ms REAL NOT NULL DEFAULT 0,
+    error_category TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_delivery_corr ON email_delivery_logs(correlation_id);
+CREATE INDEX IF NOT EXISTS idx_email_delivery_domain_status ON email_delivery_logs(recipient_domain, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS email_suppressions (
+    email_hash TEXT PRIMARY KEY,
+    recipient_domain TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS email_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    correlation_id TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -393,8 +533,11 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
 
 def run_migrations(conn: sqlite3.Connection) -> None:
     """Safely migrate existing SQLite tables without losing or altering existing user records."""
-    # Users profile image support
+    # Users profile image & email verification status (existing users default to verified = 1)
     _ensure_column(conn, "users", "avatar_url", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "users", "email_verified", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "email_delivery_logs", "provider_message_id", "TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_email_delivery_msgid ON email_delivery_logs(provider_message_id)")
     # User preferences: 4-theme selector and 6-language selector
     _ensure_column(conn, "user_preferences", "theme", "TEXT NOT NULL DEFAULT 'neural_night'")
     _ensure_column(conn, "user_preferences", "preferred_language", "TEXT NOT NULL DEFAULT 'English'")
@@ -409,6 +552,12 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "studio_outputs", "video_file_path", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "studio_outputs", "duration_label", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "studio_outputs", "style_label", "TEXT NOT NULL DEFAULT ''")
+    # Study journal: editable journal title (safe backward-compatible migration)
+    _ensure_column(conn, "study_journal_entries", "title", "TEXT NOT NULL DEFAULT ''")
+
+    # Phase 1 Security: Migrate any legacy plaintext API credentials to AES-256-GCM at rest
+    from backend.crypto import migrate_plaintext_credentials
+    migrate_plaintext_credentials(conn)
 
 
 def init_db() -> None:

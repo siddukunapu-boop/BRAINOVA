@@ -1,0 +1,229 @@
+/* Shared Premium 3D Hardcover Notebook Cover (Personal Diary + Study Journal) */
+
+.brainova-cover-stage {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 18px 8px 28px;
+  perspective: 1800px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.brainova-closed-book {
+  position: relative;
+  width: min(352px, 100%);
+  aspect-ratio: 360 / 480;
+  border-radius: 8px 18px 18px 8px;
+  padding: 0;
+  border: 2px solid rgba(225, 29, 72, 0.72);
+  background: #090f28;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: left;
+  transform-style: preserve-3d;
+  box-shadow:
+    14px 20px 42px rgba(2, 6, 23, 0.62),
+    4px 4px 0 #f1eadb,
+    8px 8px 0 #dfd6c3,
+    11px 11px 0 #1e1b4b,
+    inset 14px 0 24px rgba(0, 0, 0, 0.45);
+  transition:
+    transform 0.36s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.36s ease,
+    border-color 0.25s ease;
+}
+
+.brainova-closed-book:hover,
+.brainova-closed-book:focus-visible {
+  transform: translateY(-6px) rotateY(-5deg);
+  border-color: rgba(244, 63, 94, 0.92);
+  box-shadow:
+    18px 28px 52px rgba(2, 6, 23, 0.72),
+    4px 4px 0 #f1eadb,
+    8px 8px 0 #dfd6c3,
+    12px 12px 0 #1e1b4b,
+    inset 14px 0 24px rgba(0, 0, 0, 0.45);
+  outline: 2px solid #f59e0b;
+  outline-offset: 4px;
+}
+
+.brainova-closed-book:active {
+  transform: translateY(-2px) rotateY(-2deg);
+}
+
+/* Hardcover Spine Crease */
+.brainova-closed-book::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 16px;
+  width: 3px;
+  z-index: 4;
+  background: linear-gradient(
+    to right,
+    rgba(0, 0, 0, 0.55),
+    rgba(255, 255, 255, 0.16) 50%,
+    rgba(0, 0, 0, 0.45)
+  );
+  pointer-events: none;
+}
+
+.brainova-cover-artwork-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #080e26;
+  pointer-events: none;
+}
+
+.brainova-cover-artwork-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+/* Subtle top & bottom scrims so title & CTA stay crisp without hiding the central Tree & Book */
+.brainova-cover-top-bar {
+  position: relative;
+  z-index: 5;
+  padding: 16px 18px 12px 28px;
+  background: linear-gradient(
+    to bottom,
+    rgba(7, 11, 30, 0.88) 0%,
+    rgba(7, 11, 30, 0.52) 68%,
+    transparent 100%
+  );
+}
+
+.brainova-cover-badge {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #fde68a;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+
+.brainova-cover-title {
+  margin: 4px 0 2px;
+  font-family: var(--font-display, 'Plus Jakarta Sans', system-ui, sans-serif);
+  font-size: 1.55rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: #fffbeb;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.75);
+  overflow-wrap: anywhere;
+}
+
+.brainova-cover-subtitle {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: rgba(241, 245, 249, 0.88);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+  overflow-wrap: anywhere;
+}
+
+.brainova-cover-bottom-bar {
+  position: relative;
+  z-index: 5;
+  padding: 18px 18px 16px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: linear-gradient(
+    to top,
+    rgba(7, 11, 30, 0.9) 0%,
+    rgba(7, 11, 30, 0.45) 70%,
+    transparent 100%
+  );
+}
+
+.brainova-cover-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(251, 191, 36, 0.58);
+  color: #fef3c7;
+  font-size: 0.82rem;
+  font-weight: 700;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.brainova-ribbon-bookmark {
+  position: absolute;
+  bottom: -14px;
+  right: 28px;
+  z-index: 6;
+  width: 16px;
+  height: 38px;
+  background: linear-gradient(180deg, #e11d48 0%, #9f1239 100%);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 76%, 0 100%);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+/* 3D Opening Flap Sharing the Same Cover Artwork */
+.brainova-opening-flap {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  border-radius: 8px 16px 16px 8px;
+  overflow: hidden;
+  background: #080e26;
+  border: 2px solid rgba(225, 29, 72, 0.72);
+  transform-origin: left center;
+  pointer-events: none;
+  animation: brainovaCoverSwingOpen 0.9s cubic-bezier(0.22, 0.88, 0.32, 1) forwards;
+  box-shadow: 12px 16px 36px rgba(2, 6, 23, 0.5);
+}
+
+@keyframes brainovaCoverSwingOpen {
+  0% {
+    transform: rotateY(0deg);
+    opacity: 1;
+  }
+  72% {
+    transform: rotateY(-125deg);
+    opacity: 0.88;
+  }
+  100% {
+    transform: rotateY(-165deg);
+    opacity: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .brainova-closed-book {
+    width: min(300px, 100%);
+  }
+
+  .brainova-cover-title {
+    font-size: 1.32rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brainova-closed-book {
+    transition: none;
+  }
+  .brainova-opening-flap {
+    animation: none !important;
+    display: none;
+  }
+}
+

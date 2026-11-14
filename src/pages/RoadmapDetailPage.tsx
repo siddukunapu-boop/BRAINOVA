@@ -13,7 +13,6 @@ import {
   BookOpen,
   Video,
   CheckSquare,
-  ExternalLink,
   Sliders,
   Play,
   Award,
@@ -21,6 +20,9 @@ import {
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp } from '../context/AppContext';
+import { ReadingMaterialView } from '../components/ReadingMaterialView';
+import { InlineYouTubePlayer } from '../components/InlineYouTubePlayer';
+import { YouTubeTutorialActions } from '../components/YouTubeTutorialActions';
 
 export const RoadmapDetailPage: React.FC = () => {
   const { roadmapId } = useParams<{ roadmapId: string }>();
@@ -245,109 +247,6 @@ export const RoadmapDetailPage: React.FC = () => {
     } catch (err: any) {
       addToast(err.message || 'Could not delete topic.', 'error');
     }
-  };
-
-  // Render Educational SVG Diagram for Topic Reading Material (Part 7)
-  const renderEducationalDiagram = (diag: any, idx: number) => {
-    const nodes: any[] = diag.nodes || [];
-    return (
-      <div
-        key={diag.id || idx}
-        style={{
-          padding: '18px',
-          borderRadius: '14px',
-          background: 'var(--bg-charcoal)',
-          border: '1px solid var(--border-strong)',
-          marginBottom: '16px',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
-          <strong style={{ color: 'var(--accent-blue)', fontSize: '0.96rem' }}>
-            {diag.title || 'Educational Architecture Diagram'}
-          </strong>
-          <span className="badge badge-indigo">
-            {diag.type === 'process' ? 'Step-by-Step Process Flow' : 'System Architecture Diagram'}
-          </span>
-        </div>
-
-        <div style={{ width: '100%', overflowX: 'auto', padding: '6px 0' }}>
-          <svg
-            width={780}
-            height={145}
-            viewBox="0 0 780 145"
-            style={{ display: 'block', margin: '0 auto' }}
-          >
-            <defs>
-              <linearGradient id={`nodeGrad_${idx}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#172347" />
-                <stop offset="100%" stopColor="#0d142c" />
-              </linearGradient>
-            </defs>
-            {nodes.slice(0, 4).map((nd: any, nIdx: number) => {
-              const x = 14 + nIdx * 192;
-              const y = 18;
-              return (
-                <g key={nIdx}>
-                  {nIdx < Math.min(3, nodes.length - 1) && (
-                    <g>
-                      <line
-                        x1={x + 168}
-                        y1={y + 48}
-                        x2={x + 190}
-                        y2={y + 48}
-                        stroke="#38bdf8"
-                        strokeWidth="2.5"
-                      />
-                      <polygon
-                        points={`${x + 190},${y + 48} ${x + 182},${y + 43} ${x + 182},${y + 53}`}
-                        fill="#38bdf8"
-                      />
-                    </g>
-                  )}
-                  <rect
-                    x={x}
-                    y={y}
-                    width={168}
-                    height={96}
-                    rx={12}
-                    fill={`url(#nodeGrad_${idx})`}
-                    stroke={nIdx === 0 ? '#38bdf8' : '#6366f1'}
-                    strokeWidth="2"
-                  />
-                  <text
-                    x={x + 12}
-                    y={y + 28}
-                    fill="#38bdf8"
-                    fontSize="11.5"
-                    fontWeight="800"
-                  >
-                    {String(nd.label || `Stage ${nIdx + 1}`).slice(0, 22)}
-                  </text>
-                  <foreignObject x={x + 12} y={y + 36} width={144} height={54}>
-                    <div
-                      style={{
-                        color: '#cbd5e1',
-                        fontSize: '10.5px',
-                        lineHeight: 1.3,
-                        overflow: 'hidden',
-                      }}
-                    >
-                      {String(nd.detail || '').slice(0, 68)}
-                    </div>
-                  </foreignObject>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-
-        {diag.caption && (
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center' }}>
-            {diag.caption}
-          </div>
-        )}
-      </div>
-    );
   };
 
   if (loading || !roadmap) {
@@ -808,57 +707,29 @@ export const RoadmapDetailPage: React.FC = () => {
                                                 Channel: <strong>{tut.channel}</strong>
                                               </div>
 
-                                              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                                                <a
-                                                  href={tut.url}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  className="btn btn-primary btn-sm"
-                                                >
-                                                  <ExternalLink size={14} />
-                                                  <span>Watch Tutorial on YouTube</span>
-                                                </a>
-
-                                                <button
-                                                  type="button"
-                                                  className="btn btn-secondary btn-sm"
-                                                  onClick={() =>
+                                              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                                <YouTubeTutorialActions
+                                                  url={tut.url}
+                                                  videoId={tut.video_id}
+                                                  isInlineOpen={showEmbed}
+                                                  onToggleInline={() =>
                                                     setShowInlineEmbedMap((prev) => ({
                                                       ...prev,
                                                       [tut.id]: !showEmbed,
                                                     }))
                                                   }
-                                                >
-                                                  <Play size={14} />
-                                                  <span>
-                                                    {showEmbed
-                                                      ? 'Hide Inline Player'
-                                                      : 'Play Inline Here'}
-                                                  </span>
-                                                </button>
+                                                />
                                               </div>
                                             </div>
                                           </div>
 
-                                          {showEmbed && tut.video_id && (
-                                            <div
-                                              style={{
-                                                marginTop: '16px',
-                                                borderRadius: '12px',
-                                                overflow: 'hidden',
-                                                aspectRatio: '16 / 9',
-                                                maxWidth: 760,
-                                                border: '1px solid var(--border-strong)',
-                                              }}
-                                            >
-                                              <iframe
+                                          {showEmbed && (
+                                            <div style={{ marginTop: '16px' }}>
+                                              <InlineYouTubePlayer
+                                                url={tut.url}
+                                                videoId={tut.video_id}
                                                 title={tut.title}
-                                                width="100%"
-                                                height="100%"
-                                                src={`https://www.youtube.com/embed/${tut.video_id}?rel=0`}
-                                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                                allowFullScreen
-                                                style={{ border: 0 }}
+                                                maxWidth={760}
                                               />
                                             </div>
                                           )}
@@ -922,173 +793,39 @@ export const RoadmapDetailPage: React.FC = () => {
                                           </h3>
                                         </div>
 
-                                        <button
-                                          type="button"
-                                          className="btn btn-secondary btn-sm"
-                                          onClick={() =>
-                                            navigate(
-                                              `/customized-roadmap?roadmap=${roadmap.id}&topic=${topic.id}`
-                                            )
-                                          }
-                                        >
-                                          <Edit3 size={14} />
-                                          <span>
-                                            {r.has_custom_reading
-                                              ? 'Edit / Restore Reading in Customized Roadmap'
-                                              : 'Add Customized Reading Material'}
-                                          </span>
-                                        </button>
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                          <button
+                                            type="button"
+                                            className="btn btn-primary btn-sm"
+                                            onClick={() =>
+                                              navigate(
+                                                `/roadmaps/${roadmap.id}/topics/${topic.id}?tab=reading`
+                                              )
+                                            }
+                                          >
+                                            <BookOpen size={14} />
+                                            <span>Open Dedicated Reading View</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() =>
+                                              navigate(
+                                                `/customized-roadmap?roadmap=${roadmap.id}&topic=${topic.id}`
+                                              )
+                                            }
+                                          >
+                                            <Edit3 size={14} />
+                                            <span>
+                                              {r.has_custom_reading
+                                                ? 'Edit / Restore Reading in Customized Roadmap'
+                                                : 'Add Customized Reading Material'}
+                                            </span>
+                                          </button>
+                                        </div>
                                       </div>
 
-                                      {/* If user saved Customized Reading Material, render it prominently */}
-                                      {r.has_custom_reading && r.custom_markdown ? (
-                                        <div
-                                          style={{
-                                            padding: '18px',
-                                            borderRadius: '12px',
-                                            background: 'var(--bg-charcoal)',
-                                            border: '1px solid rgba(168, 85, 247, 0.45)',
-                                            whiteSpace: 'pre-wrap',
-                                            lineHeight: 1.75,
-                                            color: 'var(--text-primary)',
-                                            marginBottom: '20px',
-                                          }}
-                                        >
-                                          {r.custom_markdown}
-                                        </div>
-                                      ) : (
-                                        <>
-                                          {/* Topic Introduction */}
-                                          <div style={{ marginBottom: '20px' }}>
-                                            <h3>Topic Introduction & Overview</h3>
-                                            <p style={{ color: 'var(--text-primary)', fontSize: '1.02rem' }}>
-                                              {r.overview}
-                                            </p>
-                                          </div>
-
-                                          {/* Educational SVG Diagrams */}
-                                          {r.diagrams && r.diagrams.length > 0 && (
-                                            <div style={{ marginBottom: '22px' }}>
-                                              <h3>Visual Architecture & Process Diagrams</h3>
-                                              {r.diagrams.map((diag: any, idx: number) =>
-                                                renderEducationalDiagram(diag, idx)
-                                              )}
-                                            </div>
-                                          )}
-
-                                          {/* Core Concepts & Step-by-Step Explanations */}
-                                          {(r.sections || []).map((sec: any, idx: number) => (
-                                            <div key={idx} style={{ marginBottom: '20px' }}>
-                                              <h3>{sec.heading}</h3>
-                                              <p style={{ whiteSpace: 'pre-wrap' }}>{sec.content}</p>
-                                            </div>
-                                          ))}
-
-                                          {/* Key Definitions */}
-                                          {r.terminology && r.terminology.length > 0 && (
-                                            <div style={{ marginBottom: '20px' }}>
-                                              <h3>Key Definitions & Terminology</h3>
-                                              <div className="grid-2">
-                                                {r.terminology.map((t: any, i: number) => (
-                                                  <div
-                                                    key={i}
-                                                    style={{
-                                                      padding: '12px',
-                                                      borderRadius: '10px',
-                                                      background: 'var(--bg-charcoal)',
-                                                      border: '1px solid var(--border-subtle)',
-                                                    }}
-                                                  >
-                                                    <strong style={{ color: 'var(--accent-blue)' }}>
-                                                      {t.term}:
-                                                    </strong>{' '}
-                                                    <span style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>
-                                                      {t.definition}
-                                                    </span>
-                                                  </div>
-                                                ))}
-                                              </div>
-                                            </div>
-                                          )}
-
-                                          {/* Code Examples */}
-                                          {r.code_examples && r.code_examples.length > 0 && (
-                                            <div style={{ marginBottom: '20px' }}>
-                                              <h3>Technical Implementation Examples</h3>
-                                              {r.code_examples.map((ex: any, idx: number) => (
-                                                <div key={idx} style={{ marginBottom: '12px' }}>
-                                                  <div style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--accent-blue)', marginBottom: '4px' }}>
-                                                    {ex.title} ({ex.language})
-                                                  </div>
-                                                  <pre>
-                                                    <code>{ex.code}</code>
-                                                  </pre>
-                                                  {ex.explanation && (
-                                                    <p style={{ fontSize: '0.85rem' }}>
-                                                      {ex.explanation}
-                                                    </p>
-                                                  )}
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-
-                                          {/* Common Mistakes & Key Takeaways */}
-                                          <div className="grid-2" style={{ marginBottom: '18px' }}>
-                                            {r.mistakes && r.mistakes.length > 0 && (
-                                              <div
-                                                style={{
-                                                  padding: '14px',
-                                                  borderRadius: '12px',
-                                                  background: 'rgba(239, 68, 68, 0.08)',
-                                                  border: '1px solid rgba(239, 68, 68, 0.28)',
-                                                }}
-                                              >
-                                                <strong style={{ color: '#fca5a5' }}>
-                                                  Common Mistakes to Avoid
-                                                </strong>
-                                                <ul style={{ paddingLeft: '18px', marginTop: '8px', fontSize: '0.86rem' }}>
-                                                  {r.mistakes.map((m: string, i: number) => (
-                                                    <li key={i}>{m}</li>
-                                                  ))}
-                                                </ul>
-                                              </div>
-                                            )}
-
-                                            {r.takeaways && r.takeaways.length > 0 && (
-                                              <div
-                                                style={{
-                                                  padding: '14px',
-                                                  borderRadius: '12px',
-                                                  background: 'rgba(16, 185, 129, 0.08)',
-                                                  border: '1px solid rgba(16, 185, 129, 0.28)',
-                                                }}
-                                              >
-                                                <strong style={{ color: '#6ee7b7' }}>
-                                                  Key Takeaways
-                                                </strong>
-                                                <ul style={{ paddingLeft: '18px', marginTop: '8px', fontSize: '0.86rem' }}>
-                                                  {r.takeaways.map((tk: string, i: number) => (
-                                                    <li key={i}>{tk}</li>
-                                                  ))}
-                                                </ul>
-                                              </div>
-                                            )}
-                                          </div>
-
-                                          {/* Quick Revision Summary */}
-                                          <div
-                                            style={{
-                                              padding: '14px 18px',
-                                              borderRadius: '12px',
-                                              background: 'var(--bg-charcoal)',
-                                              borderLeft: '4px solid var(--accent-blue)',
-                                            }}
-                                          >
-                                            <strong>Quick Revision Summary:</strong> {r.summary}
-                                          </div>
-                                        </>
-                                      )}
+                                      <ReadingMaterialView reading={r} topic={topic} />
                                     </div>
                                   );
                                 })()}

@@ -12,9 +12,18 @@ Used by all 9 AI Studio tools to ensure genuine native-script educational output
 both when calling cloud LLMs and when using the deterministic local knowledge synthesizer.
 """
 
-from typing import Any, Dict, List
+import unicodedata
+from typing import Any, Dict, List, Tuple
 
 SUPPORTED_LANGUAGES = ["English", "Telugu", "Hindi", "Kannada", "Tamil", "Marathi"]
+
+LANGUAGE_SCRIPT_RANGES: Dict[str, Tuple[int, int]] = {
+    "Telugu": (0x0C00, 0x0C7F),
+    "Hindi": (0x0900, 0x097F),
+    "Marathi": (0x0900, 0x097F),
+    "Kannada": (0x0C80, 0x0CFF),
+    "Tamil": (0x0B80, 0x0BFF),
+}
 
 LANGUAGE_NATIVE_NAMES: Dict[str, str] = {
     "English": "English",
@@ -315,11 +324,75 @@ def normalize_language(lang: str) -> str:
     return "English"
 
 
+def validate_supported_language(lang: Optional[str]) -> str:
+    """
+    Validates that a requested language is one of the 6 supported languages.
+    Never silently falls back to English for an explicit unsupported language.
+    """
+    if not lang or not str(lang).strip():
+        return "English"
+    clean = str(lang).strip().lower()
+    for supported in SUPPORTED_LANGUAGES:
+        native = LANGUAGE_NATIVE_NAMES.get(supported, "").lower()
+        if supported.lower() == clean or supported.lower() in clean or (native and clean in native):
+            return supported
+    raise ValueError(
+        f"Unsupported language '{lang}'. Supported languages: {', '.join(SUPPORTED_LANGUAGES)}."
+    )
+
+
+def validate_script_language(text: str, target_language: str) -> Tuple[bool, str]:
+    """
+    Deterministic Unicode script & semantic language check.
+    Allows legitimate technical terminology, proper names, dates, and abbreviations
+    in Latin/digits while verifying the primary script matches `target_language`.
+    """
+    if not text or not text.strip():
+        return False, "Generated script text is empty."
+
+    letters = [ch for ch in text if unicodedata.category(ch).startswith("L")]
+    if not letters:
+        return False, "Generated script contains no alphabetic letters."
+
+    if target_language == "English":
+        latin_count = sum(1 for ch in letters if "LATIN" in unicodedata.name(ch, ""))
+        if latin_count / len(letters) < 0.70:
+            return False, "English script validation failed: unexpected non-Latin script dominance."
+        return True, "ok"
+
+    rng = LANGUAGE_SCRIPT_RANGES.get(target_language)
+    if not rng:
+        return False, f"Unsupported target language '{target_language}'."
+
+    lo, hi = rng
+    target_count = sum(1 for ch in letters if lo <= ord(ch) <= hi)
+    # Check for wrong Indic scripts (e.g. Hindi Devanagari emitted when Telugu was requested)
+    wrong_indic = 0
+    for ch in letters:
+        cp = ord(ch)
+        for other_lang, (olo, ohi) in LANGUAGE_SCRIPT_RANGES.items():
+            if other_lang != target_language and (olo, ohi) != (lo, hi) and olo <= cp <= ohi:
+                wrong_indic += 1
+                break
+
+    if wrong_indic > 5:
+        return False, f"Script mismatch: found characters from another Indic script instead of {target_language}."
+
+    # Allow Latin technical terms/names/abbreviations, but require substantial target script content
+    if target_count < 8 or (target_count / len(letters)) < 0.25:
+        return (
+            False,
+            f"Generated {target_language} script lacks sufficient native {target_language} script content "
+            f"({target_count}/{len(letters)} letters).",
+        )
+    return True, "ok"
+
+
 def localize_studio_output(tool_type: str, result: Dict[str, Any], language: str, topic_hint: str = "") -> Dict[str, Any]:
     """
     Ensures that when a non-English language (Telugu, Hindi, Kannada, Tamil, Marathi) is selected,
-    the generated output is genuinely localized into native script if the fallback engine produced English text.
-    Also attaches `language` metadata to the output object.
+    offline fallback outputs are localized while LLM-generated native-script outputs are preserved intact.
+    Maintains exact transcript-to-TTS parity (`spoken_text == text`).
     """
     lang = normalize_language(language)
     result["language"] = lang
@@ -330,32 +403,14 @@ def localize_studio_output(tool_type: str, result: Dict[str, Any], language: str
     badge = pack["native_badge"]
     base_title = topic_hint or result.get("title") or "BRAINOVA Study Module"
 
-    # If the output came from the local engine (or lacks native script characters), localize it richly
     if tool_type == "audio_overview":
-        result["title"] = f"{pack['overview_prefix']}: {base_title} ({badge})"
-        result["summary"] = pack["podcast_intro"]
         dialogue = result.get("dialogue") or []
-        native_turns = [
-            pack["podcast_intro"],
-            pack["podcast_turn_2"],
-            pack["podcast_turn_3"],
-            pack["podcast_turn_4"],
-            pack["podcast_outro"],
-        ]
-        new_dialogue: List[Dict[str, str]] = []
-        for idx in range(max(len(dialogue), len(native_turns))):
-            orig_turn = dialogue[idx] if idx < len(dialogue) else {}
-            eng_text = orig_turn.get("text", "")
-            nat_text = native_turns[idx % len(native_turns)]
-            new_dialogue.append(
-                {
-                    "speaker": orig_turn.get("speaker") or ("Alex (Host)" if idx % 2 == 0 else "Maya (Expert)"),
-                    "text": f"{nat_text} [{base_title}]",
-                    "spoken_text": f"{nat_text} {eng_text}",
-                }
-            )
-        result["dialogue"] = new_dialogue
-        result["key_takeaways"] = pack["key_points"]
+        for turn in dialogue:
+            if isinstance(turn, dict):
+                text_val = str(turn.get("text") or "").strip()
+                turn["text"] = text_val
+                turn["spoken_text"] = text_val
+        return result
 
     elif tool_type == "video_overview":
         result["title"] = f"{pack['overview_prefix']} — {base_title} ({badge})"

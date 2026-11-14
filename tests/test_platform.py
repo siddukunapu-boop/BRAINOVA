@@ -19,9 +19,10 @@ import sys
 import tempfile
 import unittest
 
-# Configure isolated test database before importing backend
+# Configure isolated test database and isolated test master key before importing backend
 TEST_DB_DIR = tempfile.mkdtemp(prefix="aetherlearn_test_")
 os.environ["AETHER_DB_PATH"] = os.path.join(TEST_DB_DIR, "test_aetherlearn.db")
+os.environ["BRAINOVA_MASTER_KEY_FILE"] = os.path.join(TEST_DB_DIR, ".test_master_key")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -37,36 +38,62 @@ class AetherLearnPlatformTests(unittest.TestCase):
     def setUpClass(cls):
         init_db()
         cls.client = TestClient(app)
+        from backend.email_service import set_email_sender_for_tests
 
-        # Create User A
-        res_a = cls.client.post(
-            "/api/auth/signup",
-            json={
-                "name": "Alice Engineer",
-                "email": "alice@aetherlearn.edu",
-                "password": "StrongPassword123!",
-                "target_role": "Full Stack Developer",
-            },
-        )
-        assert res_a.status_code == 200, res_a.text
-        cls.token_a = res_a.json()["token"]
-        cls.user_a = res_a.json()["user"]
-        cls.headers_a = {"Authorization": f"Bearer {cls.token_a}"}
+        captured_otps = {}
 
-        # Create User B (for cross-user security & isolation verification)
-        res_b = cls.client.post(
-            "/api/auth/signup",
-            json={
-                "name": "Bob Intruder",
-                "email": "bob@aetherlearn.edu",
-                "password": "BobPassword123!",
-                "target_role": "Data Scientist",
-            },
-        )
-        assert res_b.status_code == 200, res_b.text
-        cls.token_b = res_b.json()["token"]
-        cls.user_b = res_b.json()["user"]
-        cls.headers_b = {"Authorization": f"Bearer {cls.token_b}"}
+        def _capture_email(to_email: str, _name: str, otp_code: str, _expires: int):
+            captured_otps[to_email.lower()] = otp_code
+
+        set_email_sender_for_tests(_capture_email)
+        try:
+            # Create User A
+            res_a = cls.client.post(
+                "/api/auth/signup",
+                json={
+                    "name": "Alice Engineer",
+                    "email": "alice@aetherlearn.edu",
+                    "password": "StrongPassword123!",
+                    "target_role": "Full Stack Developer",
+                },
+            )
+            assert res_a.status_code == 200, res_a.text
+            ver_a = cls.client.post(
+                "/api/auth/verify-email",
+                json={
+                    "pending_token": res_a.json()["pending_token"],
+                    "otp_code": captured_otps["alice@aetherlearn.edu"],
+                },
+            )
+            assert ver_a.status_code == 200, ver_a.text
+            cls.token_a = ver_a.json()["token"]
+            cls.user_a = ver_a.json()["user"]
+            cls.headers_a = {"Authorization": f"Bearer {cls.token_a}"}
+
+            # Create User B (for cross-user security & isolation verification)
+            res_b = cls.client.post(
+                "/api/auth/signup",
+                json={
+                    "name": "Bob Intruder",
+                    "email": "bob@aetherlearn.edu",
+                    "password": "BobPassword123!",
+                    "target_role": "Data Scientist",
+                },
+            )
+            assert res_b.status_code == 200, res_b.text
+            ver_b = cls.client.post(
+                "/api/auth/verify-email",
+                json={
+                    "pending_token": res_b.json()["pending_token"],
+                    "otp_code": captured_otps["bob@aetherlearn.edu"],
+                },
+            )
+            assert ver_b.status_code == 200, ver_b.text
+            cls.token_b = ver_b.json()["token"]
+            cls.user_b = ver_b.json()["user"]
+            cls.headers_b = {"Authorization": f"Bearer {cls.token_b}"}
+        finally:
+            set_email_sender_for_tests(None)
 
     def test_01_auth_and_secret_masking(self):
         # Verify /api/auth/me works
@@ -405,14 +432,35 @@ class AetherLearnPlatformTests(unittest.TestCase):
                 # Verify 1080p HD Video Overview generates playable MP4 + spoken WAV + 1080p slide frames
                 vid_meta = out["content"]["video"]
                 self.assertTrue(vid_meta["ready"])
+                self.assertTrue(vid_meta["video_ready"])
+                self.assertEqual(vid_meta["ready"], vid_meta["video_ready"])
                 self.assertEqual(vid_meta["resolution"], "1920x1080")
+                self.assertEqual(vid_meta["resolution_label"], "1920x1080 (1080p Full HD)")
+                self.assertIn("winrt", vid_meta.get("provider", "").lower())
                 self.assertGreaterEqual(len(vid_meta["slide_frames"]), 1)
+                self.assertTrue(vid_meta["slide_frames"][0]["image_data_url"].startswith("data:image/png;base64,"))
                 self.assertTrue(vid_meta["thumbnail_data_url"].startswith("data:image/png;base64,"))
+                self.assertTrue(os.path.exists(vid_meta["file_path"]))
+                self.assertGreater(os.path.getsize(vid_meta["file_path"]), 2048)
+
                 mp4_url = vid_meta["video_url"]
                 mp4_res = self.client.get(mp4_url)
                 self.assertEqual(mp4_res.status_code, 200)
                 self.assertEqual(mp4_res.headers["content-type"], "video/mp4")
-                self.assertGreater(len(mp4_res.content), 1000)
+                self.assertGreater(len(mp4_res.content), 2048)
+
+                # Validate media streams on the generated MP4 file directly
+                from backend.video_engine import validate_mp4_media_file
+                val_res = validate_mp4_media_file(vid_meta["file_path"])
+                self.assertTrue(val_res["valid"])
+                self.assertTrue(val_res["has_video_stream"])
+                self.assertTrue(val_res["has_audio_stream"])
+                self.assertEqual(val_res["resolution"], "1920x1080")
+                self.assertEqual(val_res["video_codec"], "avc1")
+                self.assertEqual(val_res["audio_codec"], "mp4a")
+                self.assertTrue(val_res["decoder_verified"])
+                self.assertGreater(val_res["decoded_video_bytes"], 0)
+                self.assertGreater(val_res["decoded_audio_bytes"], 0)
 
                 # Unauthorized access without playback_token must be rejected (401)
                 raw_mp4_path = mp4_url.split("?", 1)[0]
@@ -530,6 +578,301 @@ class AetherLearnPlatformTests(unittest.TestCase):
             self.assertEqual(t_res.status_code, 200)
             self.assertEqual(t_res.json()["preferences"]["theme"], theme_id)
             self.assertEqual(t_res.json()["preferences"]["preferred_language"], "Telugu")
+
+    def test_06_phase1_security_hardening_suite(self):
+        # 1. Credential Encryption at Rest (AES-256-GCM)
+        raw_gem = "AIzaSyPhase1EncryptedAtRestKey123456789"
+        raw_oai = "sk-proj-Phase1EncryptedAtRestKey123456789"
+        pref_res = self.client.put(
+            "/api/settings/preferences",
+            headers=self.headers_a,
+            json={"gemini_api_key": raw_gem, "openai_api_key": raw_oai},
+        )
+        self.assertEqual(pref_res.status_code, 200)
+        self.assertNotIn(raw_gem, pref_res.text)
+        self.assertNotIn(raw_oai, pref_res.text)
+        self.assertNotIn("enc:v1:", pref_res.text)
+
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT gemini_api_key, openai_api_key FROM user_preferences WHERE user_id = ?",
+                (self.user_a["id"],),
+            ).fetchone()
+            self.assertTrue(row["gemini_api_key"].startswith("enc:v1:k1:"))
+            self.assertTrue(row["openai_api_key"].startswith("enc:v1:k1:"))
+            self.assertNotIn(raw_gem, row["gemini_api_key"])
+            self.assertNotIn(raw_oai, row["openai_api_key"])
+
+        # Clear keys so subsequent tests remain offline
+        self.client.put(
+            "/api/settings/preferences",
+            headers=self.headers_a,
+            json={"gemini_api_key": "", "openai_api_key": ""},
+        )
+
+        # 2. Query-Parameter JWT Rejection on API routes
+        q_me = self.client.get(f"/api/auth/me?token={self.token_a}")
+        self.assertEqual(q_me.status_code, 401)
+        q_rm = self.client.get(f"/api/roadmaps?token={self.token_a}", headers=self.headers_a)
+        self.assertEqual(q_rm.status_code, 401)
+
+        # 3. Persistent Logout & Session Revocation
+        login_res = self.client.post(
+            "/api/auth/login",
+            json={"email": "alice@aetherlearn.edu", "password": "StrongPassword123!"},
+        )
+        self.assertEqual(login_res.status_code, 200)
+        ephemeral_token = login_res.json()["token"]
+        ephemeral_headers = {"Authorization": f"Bearer {ephemeral_token}"}
+
+        self.assertEqual(self.client.get("/api/auth/me", headers=ephemeral_headers).status_code, 200)
+        logout_res = self.client.post("/api/auth/logout", headers=ephemeral_headers)
+        self.assertEqual(logout_res.status_code, 200)
+
+        # Revoked token must now be rejected everywhere
+        self.assertEqual(self.client.get("/api/auth/me", headers=ephemeral_headers).status_code, 401)
+        self.assertEqual(self.client.get("/api/dashboard", headers=ephemeral_headers).status_code, 401)
+
+        # 4. Studio Quiz Answer Confidentiality & Score-Tampering Prevention
+        quiz_gen = self.client.post(
+            "/api/studio/generate",
+            headers=self.headers_a,
+            json={
+                "tool_type": "quiz",
+                "title": "Security Audit Studio Quiz",
+                "source_ids": [],
+                "config": {"topic": "Application Security", "question_count": 20},
+            },
+        )
+        self.assertEqual(quiz_gen.status_code, 200)
+        quiz_out = quiz_gen.json()["output"]
+        quiz_out_id = quiz_out["id"]
+        for q in quiz_out["content"]["questions"]:
+            self.assertNotIn("correct_index", q)
+            self.assertNotIn("explanation", q)
+
+        # Attempt to tamper with answer key via PUT /api/studio/outputs/{id}
+        tampered_questions = [
+            {**q, "correct_index": 0, "explanation": "Hacked"} for q in quiz_out["content"]["questions"]
+        ]
+        upd_quiz = self.client.put(
+            f"/api/studio/outputs/{quiz_out_id}",
+            headers=self.headers_a,
+            json={"title": "Renamed Security Quiz", "content": {"questions": tampered_questions}},
+        )
+        self.assertEqual(upd_quiz.status_code, 200)
+        for q in upd_quiz.json()["output"]["content"]["questions"]:
+            self.assertNotIn("correct_index", q)
+            self.assertNotIn("explanation", q)
+
+        # Verify authoritative stored questions were preserved and server grading returns review_items
+        with get_db() as conn:
+            stored_row = conn.execute(
+                "SELECT content_json FROM studio_outputs WHERE id = ?", (quiz_out_id,)
+            ).fetchone()
+            stored_qs = json.loads(stored_row["content_json"])["questions"]
+            self.assertTrue(any(q["correct_index"] != 0 for q in stored_qs))
+
+        studio_answers = {stored_qs[0]["id"]: stored_qs[0]["correct_index"]}
+        sub_studio = self.client.post(
+            f"/api/studio/outputs/{quiz_out_id}/quiz-submit",
+            headers=self.headers_a,
+            json={"answers": studio_answers, "duration_seconds": 90},
+        )
+        self.assertEqual(sub_studio.status_code, 200)
+        studio_att = sub_studio.json()["attempt"]
+        self.assertEqual(studio_att["score"], 1)
+        self.assertEqual(len(studio_att["review_items"]), 20)
+        self.assertIn("correct_index", studio_att["review_items"][0])
+        self.assertIn("explanation", studio_att["review_items"][0])
+
+        # 5. Cross-User Parent/Child IDOR Prevention on Notes, Flashcards, Studio Generate & Topic Quiz Regenerate
+        rm_a = self.client.get("/api/roadmaps", headers=self.headers_a).json()["roadmaps"][0]
+        rm_a_id = rm_a["id"]
+        rm_a_detail = self.client.get(f"/api/roadmaps/{rm_a_id}", headers=self.headers_a).json()["roadmap"]
+        topic_a_id = rm_a_detail["phases"][0]["topics"][0]["id"]
+        src_a_id = self.client.get("/api/sources", headers=self.headers_a).json()["sources"][0]["id"]
+
+        # Topic quiz regenerate works for owner A (and strips answers) but returns 404 for User B
+        regen_q_a = self.client.post(f"/api/topics/{topic_a_id}/quiz/regenerate", headers=self.headers_a)
+        self.assertEqual(regen_q_a.status_code, 200)
+        for q in regen_q_a.json()["quiz"]["questions"]:
+            self.assertNotIn("correct_index", q)
+            self.assertNotIn("explanation", q)
+
+        regen_q_b = self.client.post(f"/api/topics/{topic_a_id}/quiz/regenerate", headers=self.headers_b)
+        self.assertEqual(regen_q_b.status_code, 404)
+
+        # User B cannot attach User A's topic_id or roadmap_id to a note
+        b_note_topic = self.client.post(
+            "/api/notes",
+            headers=self.headers_b,
+            json={"title": "IDOR Note", "content": "x", "topic_id": topic_a_id},
+        )
+        self.assertEqual(b_note_topic.status_code, 404)
+        b_note_rm = self.client.post(
+            "/api/notes",
+            headers=self.headers_b,
+            json={"title": "IDOR Note", "content": "x", "roadmap_id": rm_a_id},
+        )
+        self.assertEqual(b_note_rm.status_code, 404)
+
+        # User B cannot attach User A's topic_id or studio_output_id to a flashcard
+        b_fc_topic = self.client.post(
+            "/api/flashcards",
+            headers=self.headers_b,
+            json={"front": "Q", "back": "A", "topic_id": topic_a_id},
+        )
+        self.assertEqual(b_fc_topic.status_code, 404)
+        b_fc_deck = self.client.post(
+            "/api/flashcards",
+            headers=self.headers_b,
+            json={"front": "Q", "back": "A", "studio_output_id": quiz_out_id},
+        )
+        self.assertEqual(b_fc_deck.status_code, 404)
+
+        # User B cannot generate a Studio output referencing User A's source_ids
+        b_studio_src = self.client.post(
+            "/api/studio/generate",
+            headers=self.headers_b,
+            json={"tool_type": "study_guide", "title": "IDOR Studio", "source_ids": [src_a_id]},
+        )
+        self.assertEqual(b_studio_src.status_code, 404)
+
+    def test_07_video_overview_media_pipeline_integrity(self):
+        """
+        Phase 1 Verification: Production-quality MP4 media validation,
+        metadata contract consistency, and error safety.
+        """
+        import tempfile
+        import struct
+        from backend.video_engine import validate_mp4_media_file
+
+        # 1. Non-existent file is rejected
+        val_none = validate_mp4_media_file("data/videos/non_existent_file.mp4")
+        self.assertFalse(val_none["valid"])
+        self.assertIn("does not exist", val_none["error"].lower())
+
+        # 2. Corrupt or fake MP4 container is rejected (e.g. ftyp + moov without trak, or random bytes)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tf:
+            fake_ftyp = b"isom\x00\x00\x02\x00isomiso2mp41"
+            ftyp_box = struct.pack(">I4s", 8 + len(fake_ftyp), b"ftyp") + fake_ftyp
+            mvhd_payload = struct.pack(
+                ">BBBBIIIIIH10s36s7I",
+                0, 0, 0, 0,
+                0, 0,
+                1000, 5000,
+                0x00010000, 0x0100,
+                b"\x00" * 10,
+                b"\x00\x01\x00\x00" + b"\x00" * 12 + b"\x00\x01\x00\x00" + b"\x00" * 12 + b"\x40\x00\x00\x00",
+                0, 0, 0, 0, 0, 0, 2,
+            )
+            mvhd_box = struct.pack(">I4s", 8 + len(mvhd_payload), b"mvhd") + mvhd_payload
+            moov_box = struct.pack(">I4s", 8 + len(mvhd_box), b"moov") + mvhd_box
+            mdat_box = struct.pack(">I4s", 8 + 4096, b"mdat") + (b"\x00" * 4096)
+            tf.write(ftyp_box + moov_box + mdat_box)
+            fake_path = tf.name
+
+        try:
+            val_fake = validate_mp4_media_file(fake_path)
+            self.assertFalse(val_fake["valid"])
+            self.assertIn("video track", val_fake["error"].lower())
+        finally:
+            if os.path.exists(fake_path):
+                os.remove(fake_path)
+
+        # 3. Retrieve User A's generated video_overview output from test_04
+        list_res = self.client.get("/api/studio/outputs?tool_type=video_overview", headers=self.headers_a)
+        self.assertEqual(list_res.status_code, 200)
+        videos = list_res.json()["outputs"]
+        self.assertGreaterEqual(len(videos), 1)
+        video_out = videos[0]
+        vid_id = video_out["id"]
+        content_vid = video_out["content"]["video"]
+
+        # 4. Assert metadata contract on persisted Library output
+        self.assertTrue(content_vid["ready"])
+        self.assertTrue(content_vid["video_ready"])
+        self.assertEqual(content_vid["resolution"], "1920x1080")
+        self.assertEqual(content_vid["resolution_label"], "1920x1080 (1080p Full HD)")
+        self.assertIn("winrt", content_vid["provider"].lower())
+        self.assertTrue(content_vid["slide_frames"][0]["image_data_url"].startswith("data:image/png;base64,"))
+
+        # 5. Test video regeneration works and yields validated media
+        regen_res = self.client.post(
+            f"/api/studio/outputs/{vid_id}/regenerate",
+            headers=self.headers_a,
+            json={"confirm_overwrite": True},
+        )
+        self.assertEqual(regen_res.status_code, 200)
+        regen_out = regen_res.json()["output"]
+        regen_vid = regen_out["content"]["video"]
+        self.assertTrue(regen_vid["ready"])
+        self.assertTrue(regen_vid["video_ready"])
+        self.assertEqual(regen_vid["resolution"], "1920x1080")
+        self.assertEqual(regen_vid["resolution_label"], "1920x1080 (1080p Full HD)")
+        self.assertTrue(os.path.exists(regen_vid["file_path"]))
+
+        regen_val = validate_mp4_media_file(regen_vid["file_path"])
+        self.assertTrue(regen_val["valid"])
+        self.assertTrue(regen_val["has_video_stream"])
+        self.assertTrue(regen_val["has_audio_stream"])
+        self.assertEqual(regen_val["video_codec"], "avc1")
+        self.assertEqual(regen_val["audio_codec"], "mp4a")
+        self.assertTrue(regen_val["decoder_verified"])
+
+    def test_08_studio_output_source_titles_contract(self):
+        """
+        Regression: `source_titles` must be a list of {id, title, file_type} objects, because the
+        Library frontend normalizes these objects (it previously called .slice() on them and crashed).
+        """
+        sources = self.client.get("/api/sources", headers=self.headers_a).json()["sources"]
+        self.assertGreaterEqual(len(sources), 1)
+        src = sources[0]
+
+        gen = self.client.post(
+            "/api/studio/generate",
+            headers=self.headers_a,
+            json={
+                "tool_type": "study_guide",
+                "title": "Source Titles Contract Guide",
+                "source_ids": [src["id"]],
+                "config": {"topic": "Distributed Consensus"},
+            },
+        )
+        self.assertEqual(gen.status_code, 200, gen.text)
+        gen_titles = gen.json()["output"]["source_titles"]
+        self.assertEqual(len(gen_titles), 1)
+
+        listing = self.client.get("/api/studio/outputs", headers=self.headers_a)
+        self.assertEqual(listing.status_code, 200)
+        linked = [o for o in listing.json()["outputs"] if o["source_ids"]]
+        self.assertGreaterEqual(len(linked), 1)
+        for out in linked:
+            self.assertIsInstance(out["source_titles"], list)
+            for entry in out["source_titles"]:
+                self.assertIsInstance(entry, dict)
+                self.assertEqual(set(entry.keys()), {"id", "title", "file_type"})
+                self.assertIsInstance(entry["id"], str)
+                self.assertIsInstance(entry["title"], str)
+                self.assertTrue(entry["title"])
+                self.assertIsInstance(entry["file_type"], str)
+
+        # Searching by a linked source's title returns outputs that use that source
+        fragment = src["title"].split()[0].lower()
+        search = self.client.get(f"/api/studio/outputs?search={fragment}", headers=self.headers_a)
+        self.assertEqual(search.status_code, 200)
+        found_ids = {o["id"] for o in search.json()["outputs"]}
+        self.assertIn(gen.json()["output"]["id"], found_ids)
+
+        # Outputs without sources return an empty list (never null)
+        no_src = self.client.post(
+            "/api/studio/generate",
+            headers=self.headers_a,
+            json={"tool_type": "study_guide", "title": "No Source Guide", "source_ids": [], "config": {"topic": "Raft"}},
+        )
+        self.assertEqual(no_src.status_code, 200, no_src.text)
+        self.assertEqual(no_src.json()["output"]["source_titles"], [])
 
 
 if __name__ == "__main__":

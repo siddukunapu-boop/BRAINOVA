@@ -2,26 +2,24 @@ import React, { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Sparkles,
   FolderOpen,
   Compass,
   Sliders,
   BookMarked,
+  BookText,
+  GraduationCap,
   CheckSquare,
   Settings,
   Search,
-  Library,
   Palette,
-  Bell,
-  ChevronLeft,
-  ChevronRight,
   LogOut,
   Menu,
   X,
-  RefreshCw,
   Check,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp, BRAINOVA_THEMES } from '../context/AppContext';
+import { FocusModalsOverlay, FocusStatusBar } from './FocusOverlayUI';
 import { apiRequest } from '../services/api';
 
 interface SearchResultItem {
@@ -36,14 +34,11 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const [showThemePopover, setShowThemePopover] = useState(false);
-  const [showJobsPopover, setShowJobsPopover] = useState(false);
-  const [activeJobs, setActiveJobs] = useState<any[]>([]);
 
   const searchRef = useRef<HTMLDivElement>(null);
   const themeRef = useRef<HTMLDivElement>(null);
@@ -73,19 +68,6 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const fetchRecentJobs = async () => {
-    try {
-      const res = await apiRequest<{ jobs: any[] }>('/api/jobs');
-      setActiveJobs((res.jobs || []).slice(0, 8));
-    } catch {
-      // ignore
-    }
-  };
-
-  useEffect(() => {
-    fetchRecentJobs();
-  }, [location.pathname]);
-
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
@@ -102,28 +84,22 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
   // Part 3 — Complete Website Navigation (Progress & Analytics removed per Part 10)
   const navItems = [
     { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/studio', label: 'AI Studio', icon: Sparkles },
     { to: '/roadmaps', label: 'AI Roadmaps', icon: Compass },
     { to: '/customized-roadmap', label: 'Customized Roadmap', icon: Sliders },
     { to: '/sources', label: 'My Sources', icon: FolderOpen },
     { to: '/resources', label: 'My Learning Resources', icon: BookMarked },
+    { to: '/diary', label: 'Diary', icon: BookText },
+    { to: '/study-journal', label: 'Study Journal', icon: GraduationCap },
+    { to: '/focus', label: 'Focus Mode', icon: ShieldCheck },
     { to: '/quizzes', label: 'Quizzes & Results', icon: CheckSquare },
     { to: '/settings', label: 'Settings', icon: Settings },
   ];
-
-  const runningJobsCount = activeJobs.filter(
-    (j) => j.status === 'queued' || j.status === 'processing'
-  ).length;
-
-  const isLibraryActive = location.pathname.startsWith('/studio-library');
 
   return (
     <div className="app-shell">
       {/* Left Navigation Sidebar */}
       <aside
-        className={`app-sidebar ${collapsed ? 'collapsed' : ''} ${
-          mobileOpen ? 'mobile-open' : ''
-        }`}
+        className={`app-sidebar ${mobileOpen ? 'mobile-open' : ''}`}
         aria-label="Primary Sidebar Navigation"
       >
         <div className="sidebar-brand">
@@ -139,30 +115,31 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                 className="brainova-logo-img"
               />
             </div>
-            {!collapsed && (
-              <div style={{ minWidth: 0 }}>
-                <span className="brand-title brainova-brand-text" style={{ fontSize: '1.08rem', display: 'block', lineHeight: 1.15 }}>
-                  BRAINOVA
-                </span>
-                <span className="brand-subtitle" style={{ fontSize: '0.68rem', color: 'var(--text-muted)', display: 'block' }}>
-                  Learn Smarter. Think Bigger.
-                </span>
-              </div>
-            )}
+            <div style={{ minWidth: 0 }}>
+              <span className="brand-title brainova-brand-text" style={{ fontSize: '1.08rem', display: 'block', lineHeight: 1.15 }}>
+                BRAINOVA
+              </span>
+              <span
+                className="brand-subtitle"
+                style={{
+                  fontSize: '0.64rem',
+                  fontWeight: 600,
+                  color: 'var(--text-muted)',
+                  letterSpacing: '0.025em',
+                  wordSpacing: '0.06em',
+                  display: 'block',
+                  whiteSpace: 'nowrap',
+                  marginTop: '1px',
+                }}
+              >
+                LEARN SMARTER. THINK BIGGER.
+              </span>
+            </div>
           </div>
-          <button
-            type="button"
-            className="btn-ghost btn-sm"
-            onClick={() => setCollapsed((c) => !c)}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-          </button>
         </div>
 
         <nav className="sidebar-nav">
-          {!collapsed && <div className="nav-section-label">BRAINOVA Platform</div>}
+          <div className="nav-section-label">BRAINOVA Platform</div>
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -170,125 +147,82 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-                title={collapsed ? item.label : undefined}
               >
                 <Icon size={18} style={{ flexShrink: 0 }} />
-                {!collapsed && <span>{item.label}</span>}
+                <span>{item.label}</span>
               </NavLink>
             );
           })}
         </nav>
 
-        {/* Bottom-Left Profile Section — Clicking navigates directly to Profile Settings (/settings) */}
+        {/* Bottom-Left Profile Section — Identity opens Profile Settings (/settings); Sign Out logs out */}
         <div className="sidebar-footer">
           {user && (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate('/settings')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') navigate('/settings');
-              }}
-              title="Open Profile Settings"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: collapsed ? 'center' : 'space-between',
-                gap: '10px',
-                padding: '9px 10px',
-                borderRadius: '10px',
-                background: 'var(--surface-2)',
-                border: '1px solid var(--border-subtle)',
-                cursor: 'pointer',
-                transition: 'border-color 150ms ease, background 150ms ease',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+            <div className="sidebar-account-card">
+              <button
+                type="button"
+                className="sidebar-account-identity"
+                onClick={() => navigate('/settings')}
+                title="Open Profile Settings"
+              >
                 {user.avatar_url ? (
                   <img
                     src={user.avatar_url}
                     alt={user.name}
-                    style={{
-                      width: 34,
-                      height: 34,
-                      borderRadius: '50%',
-                      objectFit: 'cover',
-                      border: '1px solid var(--accent-blue)',
-                      flexShrink: 0,
-                    }}
+                    className="sidebar-avatar-img"
                   />
                 ) : (
                   <div
+                    className="sidebar-avatar-initials"
                     style={{
-                      width: 34,
-                      height: 34,
-                      borderRadius: '50%',
-                      background: user.avatar_color || 'var(--accent-indigo)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: 700,
-                      fontSize: '0.86rem',
-                      color: '#fff',
-                      flexShrink: 0,
+                      background:
+                        user.avatar_color ||
+                        'linear-gradient(135deg, #06b6d4 0%, #6366f1 55%, #8b5cf6 100%)',
                     }}
+                    aria-hidden="true"
                   >
-                    {user.name.charAt(0).toUpperCase()}
+                    {user.name
+                      .trim()
+                      .split(/\s+/)
+                      .slice(0, 2)
+                      .map((part) => part.charAt(0).toUpperCase())
+                      .join('') || 'U'}
                   </div>
                 )}
-                {!collapsed && (
-                  <div style={{ overflow: 'hidden' }}>
-                    <div
-                      style={{
-                        fontSize: '0.83rem',
-                        fontWeight: 600,
-                        color: 'var(--text-primary)',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                    >
-                      {user.name}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: '0.72rem',
-                        color: 'var(--text-muted)',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                    >
-                      {user.target_role || 'Profile Settings'}
-                    </div>
+                <div className="sidebar-account-text">
+                  <div className="sidebar-account-name" title={user.name}>
+                    {user.name}
                   </div>
-                )}
-              </div>
-              {!collapsed && (
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    logoutUser();
-                  }}
-                  title="Sign out"
-                  aria-label="Sign out"
-                >
-                  <LogOut size={15} />
-                </button>
-              )}
+                  <div
+                    className="sidebar-account-role"
+                    title={user.target_role || 'Profile Settings'}
+                  >
+                    {user.target_role || 'Profile Settings'}
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className="sidebar-signout-btn"
+                onClick={logoutUser}
+                title="Sign out"
+                aria-label="Sign out"
+                data-testid="sidebar-signout-btn"
+              >
+                <LogOut size={16} aria-hidden="true" />
+              </button>
             </div>
           )}
         </div>
       </aside>
 
       {/* Main Content Wrapper */}
-      <div className={`app-main-wrapper ${collapsed ? 'sidebar-collapsed' : ''}`}>
+      <div className="app-main-wrapper">
         {/* Global Navbar (Part 2) */}
         <header className="app-topbar">
           {/* LEFT: Exact BRAINOVA Logo + BRAINOVA Name + Global Search */}
-          <div className="topbar-left" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div className="topbar-left">
             <button
               type="button"
               className="btn btn-secondary btn-sm mobile-menu-btn"
@@ -299,15 +233,8 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
             </button>
 
             <div
+              className="topbar-brand"
               onClick={() => navigate('/dashboard')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                cursor: 'pointer',
-                paddingRight: '8px',
-                flexShrink: 0,
-              }}
             >
               <div className="brainova-logo-wrap" style={{ width: 34, height: 34 }}>
                 <img
@@ -316,12 +243,12 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                   className="brainova-logo-img"
                 />
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span className="brainova-brand-text" style={{ fontSize: '0.98rem', lineHeight: 1.1 }}>
+              <div className="topbar-brand-text">
+                <span className="brainova-brand-text" style={{ fontSize: '1.02rem', lineHeight: 1.15 }}>
                   BRAINOVA
                 </span>
-                <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)', letterSpacing: '0.02em' }}>
-                  Learn Smarter. Think Bigger.
+                <span className="topbar-brand-tagline">
+                  LEARN SMARTER. THINK BIGGER.
                 </span>
               </div>
             </div>
@@ -332,7 +259,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
               <input
                 type="search"
                 className="global-search-input"
-                placeholder="Search roadmaps, topics, sources, AI Studio library..."
+                placeholder="Search roadmaps, topics, sources..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onFocus={() => {
@@ -391,26 +318,8 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
             </div>
           </div>
 
-          {/* RIGHT: AI Studio Library Direct Navigation Button + Theme Switcher Icon + Account Controls */}
+          {/* RIGHT: Theme Switcher Icon + Account Controls */}
           <div className="topbar-right" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {/* Direct AI Studio Library Navigation Button */}
-            <button
-              type="button"
-              className={`btn ${isLibraryActive ? 'btn-primary' : 'btn-secondary'} btn-sm`}
-              onClick={() => navigate('/studio-library')}
-              title="Open saved AI Studio Library"
-              data-testid="navbar-studio-library-btn"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '7px',
-                fontWeight: 600,
-              }}
-            >
-              <Library size={15} />
-              <span>AI Studio Library</span>
-            </button>
-
             {/* Four-Theme Switcher (Color-Palette Icon) */}
             <div style={{ position: 'relative' }} ref={themeRef}>
               <button
@@ -493,120 +402,16 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
               )}
             </div>
 
-            {/* Background Jobs Status Popover */}
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => {
-                  fetchRecentJobs();
-                  setShowJobsPopover((p) => !p);
-                }}
-                aria-label="Generation Queue Status"
-                title="Generation Queue Status"
-              >
-                <Bell size={15} />
-                {runningJobsCount > 0 && (
-                  <span className="badge badge-blue" style={{ padding: '1px 6px' }}>
-                    {runningJobsCount}
-                  </span>
-                )}
-              </button>
-              {showJobsPopover && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    right: 0,
-                    top: 'calc(100% + 8px)',
-                    width: '320px',
-                    background: 'var(--surface-1)',
-                    border: '1px solid var(--border-default)',
-                    borderRadius: '12px',
-                    boxShadow: 'var(--shadow-lg)',
-                    padding: '12px',
-                    zIndex: 200,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      marginBottom: '8px',
-                    }}
-                  >
-                    <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>
-                      Resource Generation Queue
-                    </span>
-                    <button
-                      type="button"
-                      className="btn-ghost btn-sm"
-                      onClick={fetchRecentJobs}
-                      title="Refresh queue"
-                    >
-                      <RefreshCw size={13} />
-                    </button>
-                  </div>
-                  {activeJobs.length === 0 ? (
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '8px 0' }}>
-                      No recent background jobs.
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '6px',
-                        maxHeight: '240px',
-                        overflowY: 'auto',
-                      }}
-                    >
-                      {activeJobs.map((j) => (
-                        <div
-                          key={j.id}
-                          style={{
-                            padding: '8px',
-                            borderRadius: '8px',
-                            background: 'var(--surface-2)',
-                            fontSize: '0.78rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '8px',
-                          }}
-                        >
-                          <div>
-                            <div style={{ fontWeight: 600, textTransform: 'capitalize' }}>
-                              {j.resource_type} Generation
-                            </div>
-                            <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>
-                              Topic #{j.topic_id?.slice(-6)}
-                            </div>
-                          </div>
-                          <span
-                            className={`badge ${
-                              j.status === 'completed'
-                                ? 'badge-success'
-                                : j.status === 'failed'
-                                ? 'badge-danger'
-                                : 'badge-blue'
-                            }`}
-                          >
-                            {j.status}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
           </div>
         </header>
+
+        {/* Active Strict Focus Mode Status Dock */}
+        <FocusStatusBar />
 
         {/* Page Content */}
         <main className="app-content-container">{children}</main>
       </div>
+      <FocusModalsOverlay />
     </div>
   );
 };

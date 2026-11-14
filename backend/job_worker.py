@@ -9,9 +9,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
-from backend.ai_engine import generateTopicQuiz, generateTopicReading, recommendTutorials
+from backend.ai_engine import generateTopicQuiz, generateTopicReading, generateVideoStoryboard, recommendTutorials
 from backend.auth import ensure_user_preferences
+from backend.crypto import redact_sensitive_text
 from backend.database import get_db, new_id, utc_now
+from backend.doc_processor import diagnose_and_recover_source_chunks, retrieve_relevant_chunks
+from backend.multilang_engine import normalize_language
+from backend.video_engine import synthesize_educational_video
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="aether_job_worker")
 _ACTIVE_LOCK = threading.Lock()
@@ -109,10 +113,16 @@ def execute_job_sync(job_id: str, force_overwrite: bool = False) -> Optional[Dic
             )
 
             user_id = job["user_id"]
+            job_type = job.get("job_type", "topic_resource")
             topic_id = job["topic_id"]
             roadmap_id = job["roadmap_id"]
             r_type = job["resource_type"]
+            prefs = ensure_user_preferences(conn, user_id)
 
+        if job_type == "studio_video":
+            return _execute_studio_video_job(job_id, job["studio_output_id"], user_id, prefs)
+
+        with get_db(commit=True) as conn:
             topic = conn.execute(
                 "SELECT * FROM roadmap_topics WHERE id = ? AND user_id = ?",
                 (topic_id, user_id),
@@ -121,7 +131,6 @@ def execute_job_sync(job_id: str, force_overwrite: bool = False) -> Optional[Dic
                 "SELECT * FROM roadmaps WHERE id = ? AND user_id = ?",
                 (roadmap_id, user_id),
             ).fetchone()
-            prefs = ensure_user_preferences(conn, user_id)
 
         if not topic or not roadmap:
             with get_db(commit=True) as conn:
@@ -345,7 +354,7 @@ def execute_job_sync(job_id: str, force_overwrite: bool = False) -> Optional[Dic
             return conn.execute("SELECT * FROM generation_jobs WHERE id = ?", (job_id,)).fetchone()
 
     except Exception as exc:
-        safe_err = str(exc)[:300] or "Resource generation failed."
+        safe_err = redact_sensitive_text(str(exc))[:300] or "Resource generation failed."
         with get_db(commit=True) as conn:
             conn.execute(
                 """
@@ -359,6 +368,231 @@ def execute_job_sync(job_id: str, force_overwrite: bool = False) -> Optional[Dic
     finally:
         with _ACTIVE_LOCK:
             _IN_FLIGHT_JOB_IDS.discard(job_id)
+
+
+def _update_studio_video_progress(
+    output_id: str,
+    user_id: str,
+    content_base: Dict[str, Any],
+    stage_key: str,
+    stage_label: str,
+    progress: int,
+    audio_file_path: Optional[str] = None,
+) -> None:
+    payload = {
+        **(content_base or {}),
+        "video": {
+            "ready": False,
+            "video_ready": False,
+            "status": stage_key,
+            "stage": stage_label,
+            "progress": max(0, min(99, int(progress))),
+        },
+    }
+    with get_db(commit=True) as conn:
+        if audio_file_path:
+            conn.execute(
+                "UPDATE studio_outputs SET content_json = ?, audio_file_path = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                (json.dumps(payload), audio_file_path, utc_now(), output_id, user_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE studio_outputs SET content_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                (json.dumps(payload), utc_now(), output_id, user_id),
+            )
+
+
+def _execute_studio_video_job(job_id: str, output_id: str, user_id: str, prefs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Executes an asynchronous multi-batch 1080p 24fps Video Overview job with genuine progress & checkpoints."""
+    import os
+    from backend.video_engine import AUDIO_DIR
+
+    try:
+        with get_db(commit=True) as conn:
+            row = conn.execute(
+                "SELECT * FROM studio_outputs WHERE id = ? AND user_id = ?",
+                (output_id, user_id),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Target Studio output record no longer exists.")
+            source_ids = json.loads(row.get("source_ids_json") or "[]")
+            config = json.loads(row.get("config_json") or "{}")
+            existing_content = json.loads(row.get("content_json") or "{}")
+            existing_audio_path = str(row.get("audio_file_path") or "")
+            language = normalize_language(row.get("language") or config.get("language") or "English")
+            config["language"] = language
+            query_hint = config.get("topic") or row.get("title") or ""
+            conn.execute(
+                "UPDATE studio_outputs SET status = 'processing', error_message = '', updated_at = ? WHERE id = ? AND user_id = ?",
+                (utc_now(), output_id, user_id),
+            )
+
+        content: Dict[str, Any] = existing_content if isinstance(existing_content, dict) else {}
+        collected_scenes: List[Dict[str, Any]] = list(content.get("scenes") or [])
+        completed_offsets = set(int(x) for x in (content.get("completed_batch_offsets") or []))
+        storyboard_complete = bool(content.get("storyboard_complete")) and len(collected_scenes) >= 1
+
+        if not storyboard_complete:
+            _update_studio_video_progress(
+                output_id, user_id, content, "source_analysis", "Source analysis: retrieving complete document passages", 10
+            )
+            with get_db(commit=True) as conn:
+                chunks, retrieval_diag = diagnose_and_recover_source_chunks(conn, user_id, source_ids, str(query_hint), top_k=60)
+            if source_ids and not chunks:
+                content["error_code"] = retrieval_diag.get("error_code", "insufficient_source_evidence")
+                content["error_retryable"] = bool(retrieval_diag.get("retryable", False))
+                raise RuntimeError(
+                    retrieval_diag.get("user_message")
+                    or "This document does not contain enough readable educational content to create a reliable Video Overview."
+                )
+
+            _update_studio_video_progress(
+                output_id, user_id, content, "concept_planning", "Concept planning: analyzing complexity & visual formats", 18
+            )
+
+            seen_global = set(
+                int(s.get("global_scene_number") or s.get("scene_number") or idx)
+                for idx, s in enumerate(collected_scenes, start=1)
+            )
+            batch_offset = int(content.get("next_batch_offset") or 0)
+            safety_loops = 0
+            while safety_loops < 20:
+                safety_loops += 1
+                if batch_offset in completed_offsets:
+                    batch_limit = int((content.get("planning_metrics") or {}).get("batch_limit") or 24)
+                    batch_offset += batch_limit
+                    continue
+
+                batch_num = len(completed_offsets) + 1
+                _update_studio_video_progress(
+                    output_id,
+                    user_id,
+                    content,
+                    "storyboard_generation",
+                    f"Storyboard generation (Batch {batch_num}, offset {batch_offset})",
+                    min(42, 22 + len(completed_offsets) * 8),
+                )
+                batch_sb = generateVideoStoryboard(
+                    chunks,
+                    {**config, "batch_offset": batch_offset},
+                    user_prefs=prefs,
+                    source_ids=source_ids,
+                )
+                pm = batch_sb.get("planning_metrics") or {}
+                for sc in batch_sb.get("scenes") or []:
+                    gnum = int(sc.get("global_scene_number") or sc.get("scene_number") or (len(collected_scenes) + 1))
+                    if gnum not in seen_global:
+                        seen_global.add(gnum)
+                        sc_copy = dict(sc)
+                        sc_copy["global_scene_number"] = gnum
+                        sc_copy["scene_number"] = len(collected_scenes) + 1
+                        collected_scenes.append(sc_copy)
+
+                completed_offsets.add(batch_offset)
+                has_more = bool(pm.get("has_more_batches"))
+                next_off = pm.get("next_batch_offset")
+                total_planned = int(pm.get("total_planned_scenes") or len(collected_scenes))
+
+                content = {
+                    **batch_sb,
+                    "scenes": collected_scenes,
+                    "completed_batch_offsets": sorted(completed_offsets),
+                    "has_more_batches": has_more,
+                    "next_batch_offset": next_off,
+                    "storyboard_complete": not has_more,
+                    "planning_metrics": {
+                        **pm,
+                        "planned_scenes": len(collected_scenes),
+                        "batches_processed": len(completed_offsets),
+                    },
+                }
+
+                pct = 24 + int(20 * (len(collected_scenes) / max(1, total_planned)))
+                _update_studio_video_progress(
+                    output_id,
+                    user_id,
+                    content,
+                    "batch_processing",
+                    f"Batch processing: {len(collected_scenes)} / {total_planned} scenes planned",
+                    pct,
+                )
+                if not has_more or next_off is None:
+                    break
+                batch_offset = int(next_off)
+
+        dur_lbl = str(row.get("duration_label") or config.get("duration") or "Adaptive (Content-Driven)")
+        sty_lbl = str(row.get("style_label") or config.get("style") or "Concept Breakdown & Visual Synthesis")
+        openai_key = (prefs.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or "").strip()
+
+        def _on_render_progress(stage_key: str, stage_label: str, pct: int) -> None:
+            ckpt_wav = os.path.join(AUDIO_DIR, f"{output_id}_vid.wav")
+            wav_to_save = ckpt_wav if os.path.exists(ckpt_wav) and os.path.getsize(ckpt_wav) > 1000 else None
+            _update_studio_video_progress(
+                output_id, user_id, content, stage_key, stage_label, pct, audio_file_path=wav_to_save
+            )
+
+        video_meta = synthesize_educational_video(
+            output_id=output_id,
+            storyboard=content,
+            language=language,
+            duration_label=dur_lbl,
+            style_label=sty_lbl,
+            openai_api_key=openai_key,
+            resume_audio_path=existing_audio_path or None,
+            progress_callback=_on_render_progress,
+        )
+        if not video_meta.get("video_ready"):
+            raise RuntimeError("Final MP4 validation did not pass.")
+
+        content["video"] = video_meta
+        content["language"] = language
+        content["total_duration_seconds"] = video_meta.get("duration_seconds", content.get("total_duration_seconds", 0))
+
+        with get_db(commit=True) as conn:
+            now = utc_now()
+            conn.execute(
+                """
+                UPDATE studio_outputs
+                SET content_json = ?, audio_file_path = ?, video_file_path = ?, status = 'completed', error_message = '', updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (json.dumps(content), video_meta.get("audio_file_path", ""), video_meta.get("file_path", ""), now, output_id, user_id),
+            )
+            conn.execute(
+                "UPDATE generation_jobs SET status = 'completed', result_id = ?, error_message = '', completed_at = ? WHERE id = ?",
+                (output_id, now, job_id),
+            )
+            return conn.execute("SELECT * FROM generation_jobs WHERE id = ?", (job_id,)).fetchone()
+    except Exception as exc:
+        safe_err = redact_sensitive_text(str(exc))[:500]
+        err_code = getattr(exc, "code", None) or (content.get("error_code") if "content" in locals() and isinstance(content, dict) else None) or "processing_failure"
+        non_retryable_codes = {
+            "scanned_pdf_ocr_unavailable",
+            "corrupt_document",
+            "insufficient_source_evidence",
+            "unauthorized_source",
+        }
+        is_retryable = err_code not in non_retryable_codes
+        if "content" in locals() and isinstance(content, dict):
+            content["error_code"] = err_code
+            content["error_retryable"] = is_retryable
+        now = utc_now()
+        with get_db(commit=True) as conn:
+            if "content" in locals() and isinstance(content, dict):
+                conn.execute(
+                    "UPDATE studio_outputs SET content_json = ?, status = 'failed', error_message = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                    (json.dumps(content), safe_err, now, output_id, user_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE studio_outputs SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                    (safe_err, now, output_id, user_id),
+                )
+            conn.execute(
+                "UPDATE generation_jobs SET status = 'failed', retry_count = retry_count + 1, error_message = ?, completed_at = ? WHERE id = ?",
+                (safe_err, now, job_id),
+            )
+            return conn.execute("SELECT * FROM generation_jobs WHERE id = ?", (job_id,)).fetchone()
 
 
 def dispatch_jobs_async(job_ids: List[str], force_overwrite: bool = False) -> None:

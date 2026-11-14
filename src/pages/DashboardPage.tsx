@@ -3,8 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import {
   Compass,
   FolderOpen,
-  Sparkles,
-  CheckSquare,
   PlayCircle,
   ArrowRight,
   Clock,
@@ -68,7 +66,6 @@ export const DashboardPage: React.FC = () => {
   const todaysTasks = data?.todays_tasks || [];
   const upcomingRevisions = data?.upcoming_revisions || [];
   const recentSources = data?.recent_sources || [];
-  const recentStudio = data?.recent_studio_outputs || [];
   const recentAttempts = data?.recent_quiz_attempts || [];
   const weeklyActivity = data?.weekly_activity || [];
   const demoData = data?.demo_data;
@@ -147,22 +144,6 @@ export const DashboardPage: React.FC = () => {
             <FolderOpen size={16} />
             <span>Upload Source</span>
           </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => navigate('/studio?tool=quiz')}
-          >
-            <CheckSquare size={16} />
-            <span>Generate Quiz</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-accent"
-            onClick={() => navigate('/studio')}
-          >
-            <Sparkles size={16} />
-            <span>Open AI Studio</span>
-          </button>
         </div>
       </div>
 
@@ -222,15 +203,15 @@ export const DashboardPage: React.FC = () => {
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem', fontWeight: 600 }}>
-              AI STUDIO & SOURCES
+              STUDY SOURCES
             </span>
-            <Sparkles size={18} color="var(--accent-violet)" />
+            <FolderOpen size={18} color="var(--accent-violet)" />
           </div>
           <div style={{ fontSize: '1.8rem', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-            {(metrics.studio_outputs_count || 0) + (metrics.total_sources || 0)}
+            {metrics.total_sources || 0}
           </div>
           <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '12px' }}>
-            {metrics.total_sources || 0} source(s) • {metrics.studio_outputs_count || 0} AI output(s)
+            {metrics.total_sources || 0} indexed study source(s)
           </div>
         </div>
       </div>
@@ -498,8 +479,8 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Bottom 3-Column Section: Recent Sources, Recent AI Studio, Recent Quiz Attempts */}
-      <div className="grid-3">
+      {/* Bottom 2-Column Section: Recent Sources, Recent Quiz Attempts */}
+      <div className="grid-2">
         {/* Recently Opened Sources */}
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
@@ -540,49 +521,6 @@ export const DashboardPage: React.FC = () => {
                   <span className={`badge ${src.status === 'ready' ? 'badge-success' : 'badge-warning'}`}>
                     {src.status}
                   </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Recently Generated AI Studio Content */}
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <h3 style={{ fontSize: '1rem' }}>Recent AI Studio Outputs</h3>
-            <button type="button" className="btn-ghost btn-sm" onClick={() => navigate('/studio-library')}>
-              AI Studio Library
-            </button>
-          </div>
-          {recentStudio.length === 0 ? (
-            <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
-              No AI Studio outputs generated yet. Transform sources into podcasts, 1080p videos, slides, or mind maps.
-            </p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {recentStudio.map((out: any) => (
-                <div
-                  key={out.id}
-                  onClick={() => navigate(`/studio-library?open=${out.id}`)}
-                  style={{
-                    padding: '10px',
-                    borderRadius: '8px',
-                    background: 'var(--bg-charcoal)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.85rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {out.title}
-                    </div>
-                    <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
-                      {out.tool_type.replace(/_/g, ' ').toUpperCase()} • {out.language || 'English'}
-                    </div>
-                  </div>
-                  <span className="badge badge-violet">Open</span>
                 </div>
               ))}
             </div>

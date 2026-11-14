@@ -5,7 +5,6 @@ import {
   Video,
   BookOpen,
   CheckCircle2,
-  ExternalLink,
   Trash2,
   Save,
   RotateCcw,
@@ -16,6 +15,8 @@ import {
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp } from '../context/AppContext';
+import { InlineYouTubePlayer } from '../components/InlineYouTubePlayer';
+import { YouTubeTutorialActions } from '../components/YouTubeTutorialActions';
 
 export const CustomizedRoadmapPage: React.FC = () => {
   const { addToast } = useApp();
@@ -43,6 +44,7 @@ export const CustomizedRoadmapPage: React.FC = () => {
   const [validatingUrl, setValidatingUrl] = useState(false);
   const [savingTutorial, setSavingTutorial] = useState(false);
   const [confirmRestoreTutorial, setConfirmRestoreTutorial] = useState(false);
+  const [showInlinePlayer, setShowInlinePlayer] = useState(false);
 
   // Customized Reading Material Form State
   const [customReadingTitle, setCustomReadingTitle] = useState('');
@@ -538,16 +540,25 @@ export const CustomizedRoadmapPage: React.FC = () => {
                         {activeTutorial.channel}
                       </div>
                     </div>
-                    <a
-                      href={activeTutorial.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn btn-secondary btn-sm"
-                    >
-                      <ExternalLink size={14} />
-                      <span>Watch</span>
-                    </a>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <YouTubeTutorialActions
+                        url={activeTutorial.url}
+                        videoId={activeTutorial.video_id}
+                        isInlineOpen={showInlinePlayer}
+                        onToggleInline={() => setShowInlinePlayer((v) => !v)}
+                        inlineLabelOpen="Hide Player"
+                        inlineLabelClosed="Play Inline Here"
+                      />
+                    </div>
                   </div>
+                )}
+
+                {activeTutorial && showInlinePlayer && (
+                  <InlineYouTubePlayer
+                    url={activeTutorial.url}
+                    videoId={activeTutorial.video_id}
+                    title={activeTutorial.title}
+                  />
                 )}
 
                 <form onSubmit={handleSaveCustomTutorial}>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   FolderOpen,
   Upload,
@@ -20,7 +20,6 @@ import { useApp } from '../context/AppContext';
 export const SourcesPage: React.FC = () => {
   const { addToast } = useApp();
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
 
   const [sources, setSources] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -230,25 +229,15 @@ export const SourcesPage: React.FC = () => {
       >
         <div>
           <span className="badge badge-blue" style={{ marginBottom: '6px' }}>
-            Source Library & RAG Pipeline
+            Source Library
           </span>
           <h1 style={{ fontSize: '1.6rem' }}>My Study Sources</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem' }}>
-            Upload PDFs, Markdown, or text documents. Extract & chunk content, ask grounded questions
-            with navigable citations, or launch AI Studio tools.
+            Upload PDFs, DOCX, PPTX, Markdown, or text documents. Extract readable text, and ask
+            grounded questions with navigable citations.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          {selectedSourceIds.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-accent"
-              onClick={() => navigate(`/studio?sources=${selectedSourceIds.join(',')}`)}
-            >
-              <Sparkles size={16} />
-              <span>Use {selectedSourceIds.length} Selected in AI Studio</span>
-            </button>
-          )}
           <button
             type="button"
             className="btn btn-primary"
@@ -372,8 +361,8 @@ export const SourcesPage: React.FC = () => {
             <FolderOpen size={40} color="var(--text-subtle)" style={{ marginBottom: '12px' }} />
             <h3 style={{ marginBottom: '6px' }}>Your Source Library is Empty</h3>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '18px' }}>
-              Upload a PDF, Markdown, or text study guide to extract passages and power the 9 AI
-              Studio tools.
+              Upload a PDF, DOCX, PPTX, Markdown, or text study guide to extract passages and ask
+              source-grounded questions.
             </p>
             <button
               type="button"
@@ -559,7 +548,7 @@ export const SourcesPage: React.FC = () => {
                         <strong>
                           Page / Section {ch.page_number}: {ch.section_title}
                         </strong>
-                        <span>Chunk #{ch.chunk_index + 1}</span>
+                        <span>Passage #{ch.chunk_index + 1}</span>
                       </div>
                       <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
                         {ch.content}
@@ -713,8 +702,7 @@ export const SourcesPage: React.FC = () => {
             <h3 style={{ marginBottom: '8px' }}>Delete Source Document?</h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '18px' }}>
               Are you sure you want to permanently delete <strong>"{deletingSource.title}"</strong>{' '}
-              and its indexed retrieval chunks? Saved AI Studio outputs already generated from this
-              source will remain in your library.
+              and its indexed passages?
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button

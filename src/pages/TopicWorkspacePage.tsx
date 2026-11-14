@@ -5,7 +5,6 @@ import {
   Video,
   BookOpen,
   CheckSquare,
-  ExternalLink,
   Plus,
   Trash2,
   Edit3,
@@ -23,6 +22,9 @@ import {
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp } from '../context/AppContext';
+import { ReadingMaterialView } from '../components/ReadingMaterialView';
+import { InlineYouTubePlayer } from '../components/InlineYouTubePlayer';
+import { YouTubeTutorialActions } from '../components/YouTubeTutorialActions';
 
 export const TopicWorkspacePage: React.FC = () => {
   const { roadmapId, topicId } = useParams<{ roadmapId: string; topicId: string }>();
@@ -457,31 +459,11 @@ export const TopicWorkspacePage: React.FC = () => {
           <div className="card">
             {currentTutorial ? (
               <>
-                <div
-                  style={{
-                    position: 'relative',
-                    width: '100%',
-                    paddingTop: '56.25%',
-                    borderRadius: '12px',
-                    overflow: 'hidden',
-                    background: '#000',
-                    border: '1px solid var(--border-default)',
-                    marginBottom: '16px',
-                  }}
-                >
-                  <iframe
-                    src={`https://www.youtube.com/embed/${currentTutorial.video_id}?rel=0`}
+                <div style={{ marginBottom: '16px' }}>
+                  <InlineYouTubePlayer
+                    url={currentTutorial.video_url}
+                    videoId={currentTutorial.video_id}
                     title={currentTutorial.title}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: '100%',
-                      border: 0,
-                    }}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
                   />
                 </div>
 
@@ -516,16 +498,12 @@ export const TopicWorkspacePage: React.FC = () => {
                     )}
                   </div>
 
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    <a
-                      href={currentTutorial.video_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn btn-secondary btn-sm"
-                    >
-                      <ExternalLink size={14} />
-                      <span>Watch on YouTube</span>
-                    </a>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <YouTubeTutorialActions
+                      url={currentTutorial.video_url}
+                      videoId={currentTutorial.video_id}
+                      showInlineToggle={false}
+                    />
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
@@ -784,227 +762,7 @@ export const TopicWorkspacePage: React.FC = () => {
                 </button>
               </div>
             ) : reading ? (
-              <div className="reading-prose">
-                {/* Table of Contents */}
-                <div
-                  style={{
-                    padding: '14px 18px',
-                    borderRadius: '10px',
-                    background: 'var(--bg-charcoal)',
-                    border: '1px solid var(--border-subtle)',
-                    marginBottom: '22px',
-                  }}
-                >
-                  <strong style={{ fontSize: '0.82rem', textTransform: 'uppercase', color: 'var(--accent-blue)' }}>
-                    Table of Contents
-                  </strong>
-                  <ul style={{ paddingLeft: '18px', marginTop: '8px', fontSize: '0.88rem' }}>
-                    {(reading.sections || []).map((sec: any, idx: number) => (
-                      <li key={idx}>
-                        <a href={`#${sec.id || `sec-${idx + 1}`}`}>{sec.heading}</a>
-                      </li>
-                    ))}
-                    <li>
-                      <a href="#key-definitions">Important Definitions & Terminology</a>
-                    </li>
-                    <li>
-                      <a href="#code-examples">Code Examples & Implementation</a>
-                    </li>
-                    <li>
-                      <a href="#comparison-tables">Architectural Comparison Tables</a>
-                    </li>
-                    <li>
-                      <a href="#common-mistakes">Common Mistakes & Interview Prep</a>
-                    </li>
-                  </ul>
-                </div>
-
-                {/* Overview */}
-                <p style={{ fontSize: '1.03rem', color: 'var(--text-primary)' }}>
-                  {reading.overview}
-                </p>
-
-                {/* Learning Objectives & Prerequisites */}
-                <div className="grid-2" style={{ marginBottom: '22px' }}>
-                  <div style={{ padding: '14px', borderRadius: '10px', background: 'var(--bg-charcoal)', border: '1px solid var(--border-subtle)' }}>
-                    <strong style={{ fontSize: '0.84rem', color: 'var(--accent-blue)' }}>
-                      Learning Objectives
-                    </strong>
-                    <ul style={{ paddingLeft: '18px', marginTop: '6px', fontSize: '0.86rem' }}>
-                      {(topic.learning_objectives || []).map((obj: string, i: number) => (
-                        <li key={i}>{obj}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div style={{ padding: '14px', borderRadius: '10px', background: 'var(--bg-charcoal)', border: '1px solid var(--border-subtle)' }}>
-                    <strong style={{ fontSize: '0.84rem', color: 'var(--accent-indigo)' }}>
-                      Prerequisites & Subtopics
-                    </strong>
-                    <ul style={{ paddingLeft: '18px', marginTop: '6px', fontSize: '0.86rem' }}>
-                      {(topic.subtopics || []).map((sub: string, i: number) => (
-                        <li key={i}>{sub}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-
-                {/* Main Progressive Sections */}
-                {(reading.sections || []).map((sec: any, idx: number) => (
-                  <section
-                    key={idx}
-                    id={sec.id || `sec-${idx + 1}`}
-                    style={{ marginBottom: '26px' }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                      <h3 style={{ margin: 0 }}>{sec.heading}</h3>
-                      {sec.level_tag && <span className="badge badge-blue">{sec.level_tag}</span>}
-                    </div>
-                    <div style={{ whiteSpace: 'pre-wrap' }}>{sec.content}</div>
-                    {sec.key_takeaway && (
-                      <div
-                        style={{
-                          marginTop: '10px',
-                          padding: '10px 14px',
-                          borderRadius: '8px',
-                          background: 'rgba(99, 102, 241, 0.12)',
-                          borderLeft: '3px solid var(--accent-indigo)',
-                          fontSize: '0.88rem',
-                          color: 'var(--text-primary)',
-                        }}
-                      >
-                        <strong>Key Takeaway:</strong> {sec.key_takeaway}
-                      </div>
-                    )}
-                  </section>
-                ))}
-
-                {/* Key Definitions */}
-                {reading.key_definitions?.length > 0 && (
-                  <section id="key-definitions" style={{ marginBottom: '26px' }}>
-                    <h3>Important Definitions & Terminology</h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {reading.key_definitions.map((def: any, idx: number) => (
-                        <div
-                          key={idx}
-                          style={{
-                            padding: '12px 14px',
-                            borderRadius: '10px',
-                            background: 'var(--bg-charcoal)',
-                            border: '1px solid var(--border-subtle)',
-                          }}
-                        >
-                          <strong style={{ color: 'var(--accent-blue)' }}>{def.term}:</strong>{' '}
-                          <span>{def.definition}</span>
-                          {def.context && (
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                              Context: {def.context}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                {/* Code Examples */}
-                {reading.code_examples?.length > 0 && (
-                  <section id="code-examples" style={{ marginBottom: '26px' }}>
-                    <h3>Step-by-Step Code & Implementation Examples</h3>
-                    {reading.code_examples.map((ex: any, idx: number) => (
-                      <div key={idx} style={{ marginBottom: '16px' }}>
-                        <div style={{ fontWeight: 600, fontSize: '0.92rem', marginBottom: '4px' }}>
-                          {ex.title} ({ex.language})
-                        </div>
-                        <pre className="code-block">
-                          <code>{ex.code}</code>
-                        </pre>
-                        <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)' }}>
-                          {ex.explanation}
-                        </p>
-                      </div>
-                    ))}
-                  </section>
-                )}
-
-                {/* Comparison Tables */}
-                {reading.comparison_tables?.length > 0 && (
-                  <section id="comparison-tables" style={{ marginBottom: '26px' }}>
-                    <h3>Comparisons & Trade-off Matrix</h3>
-                    {reading.comparison_tables.map((tbl: any, idx: number) => (
-                      <div key={idx} className="table-wrapper" style={{ marginTop: '10px' }}>
-                        <table className="data-table">
-                          <thead>
-                            <tr>
-                              {(tbl.headers || []).map((h: string, hi: number) => (
-                                <th key={hi}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(tbl.rows || []).map((r: string[], ri: number) => (
-                              <tr key={ri}>
-                                {r.map((cell: string, ci: number) => (
-                                  <td key={ci}>{cell}</td>
-                                ))}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ))}
-                  </section>
-                )}
-
-                {/* Common Mistakes & Interview Questions */}
-                <section id="common-mistakes" style={{ marginBottom: '26px' }}>
-                  <h3>Common Pitfalls & Exam / Interview Readiness</h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '18px' }}>
-                    {(reading.common_mistakes || []).map((m: any, idx: number) => (
-                      <div
-                        key={idx}
-                        style={{
-                          padding: '12px 14px',
-                          borderRadius: '10px',
-                          background: 'rgba(239, 68, 68, 0.08)',
-                          border: '1px solid rgba(239, 68, 68, 0.25)',
-                        }}
-                      >
-                        <strong style={{ color: '#fca5a5' }}>Pitfall: {m.mistake}</strong>
-                        <div style={{ fontSize: '0.86rem', marginTop: 4 }}>
-                          <em>Why it happens:</em> {m.why_it_happens}
-                        </div>
-                        <div style={{ fontSize: '0.86rem', color: '#6ee7b7', marginTop: 4 }}>
-                          <strong>Engineering Fix:</strong> {m.fix}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {(reading.interview_questions || []).map((iq: any, idx: number) => (
-                    <div
-                      key={idx}
-                      style={{
-                        padding: '14px',
-                        borderRadius: '10px',
-                        background: 'var(--bg-charcoal)',
-                        border: '1px solid var(--border-subtle)',
-                        marginBottom: '10px',
-                      }}
-                    >
-                      <strong style={{ color: 'var(--text-primary)' }}>Q: {iq.question}</strong>
-                      <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginTop: 6 }}>
-                        <strong>Model Answer:</strong> {iq.model_answer}
-                      </div>
-                    </div>
-                  ))}
-                </section>
-
-                {/* Summary */}
-                <section style={{ padding: '16px', borderRadius: '12px', background: 'var(--surface-2)' }}>
-                  <h3 style={{ marginTop: 0 }}>Topic Summary</h3>
-                  <p style={{ marginBottom: 0 }}>{reading.summary}</p>
-                </section>
-              </div>
+              <ReadingMaterialView reading={reading} topic={topic} showTableOfContents />
             ) : null}
           </div>
 

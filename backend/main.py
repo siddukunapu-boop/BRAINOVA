@@ -18,7 +18,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from backend.email_service import load_local_env_file
+
+load_local_env_file()
+
 from backend.ai_engine import (
+    AudioGenerationError,
+    StudioGenerationError,
     answerFromSources,
     extractStructuredTable,
     extract_youtube_video_id,
@@ -42,12 +48,16 @@ from backend.auth import (
     create_video_playback_token,
     decode_audio_playback_token,
     decode_video_playback_token,
+    encrypt_user_preference_credentials,
     ensure_user_preferences,
+    extract_bearer_token,
     get_current_user,
     hash_password,
+    revoke_access_token,
     sanitize_preferences_for_client,
     verify_password,
 )
+from backend.crypto import redact_sensitive_text
 from backend.database import (
     AUDIO_DIR,
     BASE_DIR,
@@ -70,7 +80,7 @@ from backend.job_worker import (
     execute_job_sync,
     resume_incomplete_jobs_on_startup,
 )
-from backend.multilang_engine import SUPPORTED_LANGUAGES, normalize_language
+from backend.multilang_engine import SUPPORTED_LANGUAGES, normalize_language, validate_supported_language
 from backend.tts_engine import synthesize_podcast_audio
 from backend.video_engine import synthesize_educational_video
 
@@ -105,6 +115,18 @@ def on_startup() -> None:
     resume_incomplete_jobs_on_startup()
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    Never expose internal stack traces, SQL strings, or secret values in unhandled error responses.
+    """
+    _ = redact_sensitive_text(str(exc))
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred."},
+    )
+
+
 # ============================================================================
 # PYDANTIC REQUEST SCHEMAS
 # ============================================================================
@@ -112,7 +134,17 @@ class SignupRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=100)
     email: str = Field(..., min_length=5, max_length=160)
     password: str = Field(..., min_length=6, max_length=128)
+    confirm_password: Optional[str] = None
     target_role: Optional[str] = "Full Stack Developer"
+
+
+class VerifyEmailRequest(BaseModel):
+    pending_token: str = Field(..., min_length=10, max_length=256)
+    otp_code: str = Field(..., min_length=6, max_length=6)
+
+
+class ResendVerificationRequest(BaseModel):
+    pending_token: str = Field(..., min_length=10, max_length=256)
 
 
 class LoginRequest(BaseModel):
@@ -283,6 +315,51 @@ class NoteCreateOrUpdateRequest(BaseModel):
     is_pinned: Optional[bool] = False
 
 
+class DiaryEntryCreateRequest(BaseModel):
+    title: str = Field(default="", max_length=200)
+    entry_date: Optional[str] = None
+    pages: List[str] = Field(default_factory=lambda: [""])
+    is_draft: bool = False
+    client_draft_key: str = Field(default="", max_length=100)
+
+
+class DiaryEntryUpdateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
+    pages: Optional[List[str]] = None
+    is_draft: Optional[bool] = None
+
+
+class StudyJournalCreateRequest(BaseModel):
+    title: str = Field(default="", max_length=200)
+    subject: str = Field(default="", max_length=150)
+    topic: str = Field(default="", max_length=200)
+    chapter_or_module: str = Field(default="", max_length=200)
+    study_date: Optional[str] = None
+    duration_minutes: int = 0
+    learning_status: str = "understood"
+    key_concepts: str = Field(default="", max_length=2000)
+    learning_outcomes: str = Field(default="", max_length=2000)
+    revision_notes: str = Field(default="", max_length=2000)
+    pages: List[Dict[str, Any]] = Field(default_factory=lambda: [{"type": "doc", "blocks": [{"type": "paragraph", "runs": []}]}])
+    is_draft: bool = False
+    client_draft_key: str = Field(default="", max_length=100)
+
+
+class StudyJournalUpdateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
+    subject: Optional[str] = Field(default=None, max_length=150)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    chapter_or_module: Optional[str] = Field(default=None, max_length=200)
+    study_date: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    learning_status: Optional[str] = None
+    key_concepts: Optional[str] = Field(default=None, max_length=2000)
+    learning_outcomes: Optional[str] = Field(default=None, max_length=2000)
+    revision_notes: Optional[str] = Field(default=None, max_length=2000)
+    pages: Optional[List[Dict[str, Any]]] = None
+    is_draft: Optional[bool] = None
+
+
 class QuizSubmissionRequest(BaseModel):
     answers: Dict[str, int] = Field(default_factory=dict)  # question_id or index -> selected_option_index (0..3)
     duration_seconds: int = 0
@@ -293,6 +370,7 @@ class StudioGenerateRequest(BaseModel):
     title: Optional[str] = None
     source_ids: List[str] = Field(default_factory=list)
     config: Dict[str, Any] = Field(default_factory=dict)
+    async_mode: bool = False
 
 
 class StudioUpdateRequest(BaseModel):
@@ -320,41 +398,93 @@ class FlashcardUpdateRequest(BaseModel):
 # ============================================================================
 # AUTHENTICATION & USER PROFILE ROUTES
 # ============================================================================
+@app.post("/api/auth/register")
 @app.post("/api/auth/signup")
-def signup(req: SignupRequest) -> Dict[str, Any]:
-    email_clean = req.email.strip().lower()
-    if "@" not in email_clean:
-        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+def register_account(req: SignupRequest, request: Request) -> Dict[str, Any]:
+    from backend.otp_auth import initiate_pending_registration
 
-    with get_db(commit=True) as conn:
-        existing = conn.execute("SELECT id FROM users WHERE email = ?", (email_clean,)).fetchone()
-        if existing:
-            raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    client_ip = request.client.host if request.client else ""
+    return initiate_pending_registration(
+        name=req.name,
+        email=req.email,
+        password=req.password,
+        confirm_password=req.confirm_password,
+        target_role=req.target_role or "Full Stack Developer",
+        client_ip=client_ip,
+    )
 
-        user_id = new_id("usr")
-        now = utc_now()
-        pw_hash = hash_password(req.password)
-        colors = ["#6366f1", "#38bdf8", "#8b5cf6", "#10b981", "#f59e0b"]
-        color = colors[len(email_clean) % len(colors)]
 
-        conn.execute(
-            """
-            INSERT INTO users (id, email, name, password_hash, role, target_role, bio, avatar_color, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'student', ?, '', ?, ?, ?)
-            """,
-            (user_id, email_clean, req.name.strip(), pw_hash, (req.target_role or "Full Stack Developer").strip(), color, now, now),
+@app.post("/api/auth/verify-email")
+def verify_email_otp(req: VerifyEmailRequest) -> Dict[str, Any]:
+    from backend.otp_auth import verify_pending_registration_otp
+
+    return verify_pending_registration_otp(req.pending_token, req.otp_code)
+
+
+@app.post("/api/auth/resend-verification")
+def resend_email_otp(req: ResendVerificationRequest) -> Dict[str, Any]:
+    from backend.otp_auth import resend_pending_verification
+
+    return resend_pending_verification(req.pending_token)
+
+
+@app.get("/api/auth/pending-registration/{pending_token}")
+def get_pending_registration(pending_token: str) -> Dict[str, Any]:
+    from backend.otp_auth import get_pending_registration_status
+
+    return get_pending_registration_status(pending_token)
+
+
+@app.delete("/api/auth/pending-registration/{pending_token}")
+def delete_pending_registration(pending_token: str) -> Dict[str, Any]:
+    from backend.otp_auth import cancel_pending_registration
+
+    return cancel_pending_registration(pending_token)
+
+
+@app.post("/api/email/webhook")
+def receive_email_provider_webhook(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
+    import hmac as _hmac
+    from backend.email_service import record_provider_webhook_event
+
+    configured_secret = os.environ.get("EMAIL_WEBHOOK_SECRET", "").strip()
+    if not configured_secret:
+        raise HTTPException(status_code=503, detail="Email webhook receiver is not configured.")
+    provided_secret = request.headers.get("x-email-webhook-secret", "").strip()
+    if not provided_secret or not _hmac.compare_digest(provided_secret, configured_secret):
+        raise HTTPException(status_code=401, detail="Unauthorized webhook request.")
+
+    # Support both Resend webhook format (type + data) and generic webhook format
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    event_id = (
+        str(payload.get("event_id", "")).strip()
+        or request.headers.get("svix-id", "").strip()
+    )
+    event_type = str(payload.get("event") or payload.get("type") or "").strip()
+    correlation_id = str(payload.get("correlation_id", "")).strip()
+    provider_message_id = str(
+        payload.get("provider_message_id") or data.get("email_id") or ""
+    ).strip()
+    to_list = data.get("to") if isinstance(data.get("to"), list) else []
+    recipient_email = payload.get("recipient_email") or (to_list[0] if to_list else None)
+    provider = str(payload.get("provider") or ("resend" if payload.get("type") else "webhook")).strip()
+
+    if not event_type or (not correlation_id and not provider_message_id):
+        raise HTTPException(
+            status_code=400,
+            detail="event/type and correlation_id or provider_message_id are required.",
         )
-        prefs = ensure_user_preferences(conn, user_id)
-        log_activity(conn, user_id, "signup", "user", user_id, "Created AetherLearn account", 2)
-
-        user_row = conn.execute(
-            "SELECT id, email, name, role, target_role, bio, avatar_color, created_at, updated_at FROM users WHERE id = ?",
-            (user_id,),
-        ).fetchone()
-        user_row["preferences"] = sanitize_preferences_for_client(prefs)
-
-    token = create_access_token(user_id, email_clean)
-    return {"token": token, "user": user_row}
+    try:
+        return record_provider_webhook_event(
+            correlation_id=correlation_id,
+            provider_message_id=provider_message_id,
+            event_type=event_type,
+            event_id=event_id,
+            recipient_email=str(recipient_email) if recipient_email else None,
+            provider=provider,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/auth/login")
@@ -388,7 +518,11 @@ def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str
 
 
 @app.post("/api/auth/logout")
-def logout() -> Dict[str, Any]:
+def logout(
+    token: str = Depends(extract_bearer_token),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    revoke_access_token(token, expected_user_id=current_user["id"])
     return {"ok": True, "message": "Logged out successfully."}
 
 
@@ -446,6 +580,7 @@ def update_preferences(
             if val is not None:
                 updates[field] = val
 
+        raw_credentials: Dict[str, str] = {}
         for key_field in (
             "gemini_api_key",
             "openai_api_key",
@@ -456,8 +591,11 @@ def update_preferences(
         ):
             val = getattr(req, key_field)
             if val is not None:
-                # Allow setting or clearing key
-                updates[key_field] = val.strip()
+                # Allow setting or clearing key; encrypt at rest before persisting to SQLite
+                raw_credentials[key_field] = val.strip()
+
+        if raw_credentials:
+            updates.update(encrypt_user_preference_credentials(uid, raw_credentials))
 
         if req.show_demo_data is not None:
             updates["show_demo_data"] = 1 if req.show_demo_data else 0
@@ -704,6 +842,24 @@ def delete_source(
         except OSError:
             pass
     return {"ok": True, "deleted_id": source_id}
+
+
+def _verify_user_owns_sources(conn, user_id: str, source_ids: Optional[List[str]]) -> None:
+    if not source_ids:
+        return
+    unique_ids = [sid.strip() for sid in set(source_ids) if sid and sid.strip()]
+    if not unique_ids:
+        return
+    placeholders = ",".join("?" for _ in unique_ids)
+    owned_rows = conn.execute(
+        f"SELECT id FROM sources WHERE user_id = ? AND id IN ({placeholders})",
+        [user_id, *unique_ids],
+    ).fetchall()
+    if len(owned_rows) != len(unique_ids):
+        raise HTTPException(
+            status_code=404,
+            detail="One or more selected source documents were not found or access is denied.",
+        )
 
 
 @app.post("/api/sources/ask")
@@ -1268,44 +1424,37 @@ def _format_tutorial_row(t: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_mistakes_list(raw_mistakes: Any) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    if not isinstance(raw_mistakes, list):
+        return out
+    for item in raw_mistakes:
+        if isinstance(item, dict):
+            m = str(item.get("mistake") or item.get("title") or item.get("pitfall") or "").strip()
+            why = str(item.get("why_it_happens") or item.get("why") or item.get("reason") or "").strip()
+            fix = str(item.get("fix") or item.get("solution") or "").strip()
+            if m or why or fix:
+                out.append({"mistake": m or "Common Pitfall", "why_it_happens": why, "fix": fix})
+        elif isinstance(item, str) and item.strip():
+            out.append({"mistake": item.strip(), "why_it_happens": "", "fix": ""})
+    return out
+
+
 def _format_reading_row(reading_row: Optional[Dict[str, Any]], topic_title_fallback: str = "Topic") -> Optional[Dict[str, Any]]:
     if not reading_row:
         return None
+    from backend.reading_templates import normalize_diagrams
+
     t_title = reading_row.get("title") or topic_title_fallback
-    diagrams = json.loads(reading_row.get("diagrams_json") or "[]")
-    if not diagrams:
-        diagrams = [
-            {
-                "id": "diag-arch",
-                "title": f"{t_title} — Core System Architecture & Data Flow",
-                "type": "architecture",
-                "caption": f"End-to-end execution pipeline and validation boundaries for {t_title}.",
-                "nodes": [
-                    {"id": "n1", "step": "01", "label": "Input & Contract Gate", "sublabel": "Boundary Validation", "role": "Schema & input verification"},
-                    {"id": "n2", "step": "02", "label": "Core Processing Engine", "sublabel": "State Transformation", "role": "Deterministic execution logic"},
-                    {"id": "n3", "step": "03", "label": "Resilience & Optimization", "sublabel": "Performance & Caching", "role": "Indexing & fault isolation"},
-                    {"id": "n4", "step": "04", "label": "Verified Output & Audit", "sublabel": "Persistence Layer", "role": "Transactional storage & telemetry"},
-                ],
-            },
-            {
-                "id": "diag-lifecycle",
-                "title": f"{t_title} — Step-by-Step Engineering Lifecycle",
-                "type": "process",
-                "caption": "Four-phase cycle from specification to production verification.",
-                "nodes": [
-                    {"id": "p1", "step": "Phase A", "label": "Define Invariants", "sublabel": "Contracts & types", "role": "Design"},
-                    {"id": "p2", "step": "Phase B", "label": "Modular Build", "sublabel": "Decoupled units", "role": "Implement"},
-                    {"id": "p3", "step": "Phase C", "label": "Boundary Testing", "sublabel": "Edge & load checks", "role": "Verify"},
-                    {"id": "p4", "step": "Phase D", "label": "Observability", "sublabel": "Metrics & audit", "role": "Operate"},
-                ],
-            },
-        ]
+    raw_diagrams = json.loads(reading_row.get("diagrams_json") or "[]")
+    sections_list = json.loads(reading_row.get("sections_json") or "[]")
+    sec_headings = [str(s.get("heading") or "").strip() for s in sections_list if isinstance(s, dict) and s.get("heading")]
+    diagrams = normalize_diagrams(raw_diagrams, t_title, sec_headings)
 
     has_custom = bool(reading_row.get("has_custom_reading", 0)) and bool((reading_row.get("custom_markdown") or "").strip())
     key_defs = json.loads(reading_row.get("key_definitions_json") or "[]")
-    common_m = json.loads(reading_row.get("common_mistakes_json") or "[]")
-    sections_list = json.loads(reading_row.get("sections_json") or "[]")
-    takeaways_list = [s.get("heading") for s in sections_list if s.get("heading")]
+    common_m = _normalize_mistakes_list(json.loads(reading_row.get("common_mistakes_json") or "[]"))
+    takeaways_list = [s.get("heading") for s in sections_list if isinstance(s, dict) and s.get("heading")]
     return {
         "id": reading_row["id"],
         "topic_id": reading_row["topic_id"],
@@ -1875,10 +2024,23 @@ def create_note(
     now = utc_now()
     with get_db(commit=True) as conn:
         roadmap_id = req.roadmap_id
-        if req.topic_id and not roadmap_id:
-            t = conn.execute("SELECT roadmap_id FROM roadmap_topics WHERE id = ? AND user_id = ?", (req.topic_id, uid)).fetchone()
-            if t:
-                roadmap_id = t["roadmap_id"]
+        if req.topic_id:
+            t = conn.execute(
+                "SELECT id, roadmap_id FROM roadmap_topics WHERE id = ? AND user_id = ?",
+                (req.topic_id, uid),
+            ).fetchone()
+            if not t:
+                raise HTTPException(status_code=404, detail="Topic not found or access denied.")
+            if roadmap_id and roadmap_id != t["roadmap_id"]:
+                raise HTTPException(status_code=404, detail="Roadmap not found or access denied.")
+            roadmap_id = t["roadmap_id"]
+        elif roadmap_id:
+            rm = conn.execute(
+                "SELECT id FROM roadmaps WHERE id = ? AND user_id = ?",
+                (roadmap_id, uid),
+            ).fetchone()
+            if not rm:
+                raise HTTPException(status_code=404, detail="Roadmap not found or access denied.")
 
         conn.execute(
             """
@@ -1959,6 +2121,656 @@ def delete_note(
             raise HTTPException(status_code=404, detail="Note not found.")
         conn.execute("DELETE FROM personal_notes WHERE id = ? AND user_id = ?", (note_id, uid))
     return {"ok": True, "deleted_note_id": note_id, "topic_id": existing["topic_id"]}
+
+
+# ============================================================================
+# PERSONAL DIARY (SEPARATE FROM STUDY JOURNAL)
+# ============================================================================
+def _normalize_diary_pages(pages: Any) -> List[str]:
+    if not isinstance(pages, list):
+        raise HTTPException(status_code=400, detail="Diary pages must be an ordered list of text pages.")
+    if len(pages) == 0:
+        return [""]
+    if len(pages) > 200:
+        raise HTTPException(status_code=400, detail="A diary entry cannot exceed 200 pages.")
+    out: List[str] = []
+    for p in pages:
+        if not isinstance(p, str):
+            raise HTTPException(status_code=400, detail="Each diary page must be a text string.")
+        out.append(p)
+    return out
+
+
+def _validate_diary_date(entry_date: Optional[str]) -> str:
+    from datetime import date
+    if not entry_date or not str(entry_date).strip():
+        return date.today().isoformat()
+    raw = str(entry_date).strip()
+    try:
+        parsed = date.fromisoformat(raw[:10])
+        return parsed.isoformat()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid entry_date format. Expected YYYY-MM-DD.")
+
+
+def _format_diary_entry(row: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        pages = json.loads(row.get("pages_json") or '[""]')
+        if not isinstance(pages, list) or len(pages) == 0:
+            pages = [""]
+        pages = [str(p) for p in pages]
+    except Exception:
+        pages = [""]
+    combined = " ".join(p.strip() for p in pages if p.strip())
+    preview = combined[:160] + ("..." if len(combined) > 160 else "")
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "title": row.get("title") or "",
+        "entry_date": row["entry_date"],
+        "pages": pages,
+        "page_count": len(pages),
+        "preview": preview,
+        "is_draft": bool(row.get("is_draft", 0)),
+        "client_draft_key": row.get("client_draft_key") or "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+@app.get("/api/diary")
+def list_diary_entries(
+    include_drafts: bool = Query(default=True),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db() as conn:
+        if include_drafts:
+            rows = conn.execute(
+                "SELECT * FROM diary_entries WHERE user_id = ? ORDER BY entry_date DESC, updated_at DESC",
+                (uid,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM diary_entries WHERE user_id = ? AND is_draft = 0 ORDER BY entry_date DESC, updated_at DESC",
+                (uid,),
+            ).fetchall()
+    return {"entries": [_format_diary_entry(r) for r in rows]}
+
+
+@app.get("/api/diary/draft")
+def get_latest_diary_draft(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM diary_entries WHERE user_id = ? AND is_draft = 1 ORDER BY updated_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+    return {"draft": _format_diary_entry(row) if row else None}
+
+
+@app.get("/api/diary/{entry_id}")
+def get_diary_entry(
+    entry_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Diary entry not found.")
+    return {"entry": _format_diary_entry(row)}
+
+
+@app.post("/api/diary")
+def create_diary_entry(
+    req: DiaryEntryCreateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    pages = _normalize_diary_pages(req.pages)
+    title = (req.title or "").strip()
+    has_content = bool(title) or any(p.strip() for p in pages)
+    if not req.is_draft and not has_content:
+        raise HTTPException(status_code=400, detail="Please write a title or some diary content before saving.")
+
+    entry_date = _validate_diary_date(req.entry_date)
+    draft_key = (req.client_draft_key or "").strip()
+    now = utc_now()
+
+    with get_db(commit=True) as conn:
+        # Idempotent draft/retry protection: reuse existing row if client_draft_key matches
+        if draft_key:
+            existing = conn.execute(
+                "SELECT * FROM diary_entries WHERE user_id = ? AND client_draft_key = ? LIMIT 1",
+                (uid, draft_key),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE diary_entries
+                    SET title = ?, pages_json = ?, is_draft = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (
+                        title,
+                        json.dumps(pages),
+                        1 if req.is_draft else 0,
+                        now,
+                        existing["id"],
+                        uid,
+                    ),
+                )
+                updated = conn.execute(
+                    "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?",
+                    (existing["id"], uid),
+                ).fetchone()
+                return {"entry": _format_diary_entry(updated)}
+
+        entry_id = new_id("diary")
+        conn.execute(
+            """
+            INSERT INTO diary_entries (
+                id, user_id, title, entry_date, pages_json, is_draft, client_draft_key, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entry_id,
+                uid,
+                title,
+                entry_date,
+                json.dumps(pages),
+                1 if req.is_draft else 0,
+                draft_key,
+                now,
+                now,
+            ),
+        )
+        created = conn.execute(
+            "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+    return {"entry": _format_diary_entry(created)}
+
+
+@app.put("/api/diary/{entry_id}")
+def update_diary_entry(
+    entry_id: str,
+    req: DiaryEntryUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    now = utc_now()
+    with get_db(commit=True) as conn:
+        existing = conn.execute(
+            "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Diary entry not found.")
+
+        title = existing["title"] if req.title is None else req.title.strip()
+        if req.pages is not None:
+            pages = _normalize_diary_pages(req.pages)
+        else:
+            pages = _format_diary_entry(existing)["pages"]
+        is_draft = bool(existing["is_draft"]) if req.is_draft is None else bool(req.is_draft)
+
+        if not is_draft and not title and not any(p.strip() for p in pages):
+            raise HTTPException(status_code=400, detail="Please write a title or some diary content before saving.")
+
+        # Original entry_date is strictly preserved on edits
+        conn.execute(
+            """
+            UPDATE diary_entries
+            SET title = ?, pages_json = ?, is_draft = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (title, json.dumps(pages), 1 if is_draft else 0, now, entry_id, uid),
+        )
+        updated = conn.execute(
+            "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+    return {"entry": _format_diary_entry(updated)}
+
+
+@app.delete("/api/diary/{entry_id}")
+def delete_diary_entry(
+    entry_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        existing = conn.execute(
+            "SELECT id FROM diary_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Diary entry not found.")
+        conn.execute(
+            "DELETE FROM diary_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        )
+    return {"ok": True, "deleted_entry_id": entry_id}
+
+
+# ============================================================================
+# STUDY JOURNAL (SEPARATE ACADEMIC RICH-TEXT NOTEBOOK)
+# ============================================================================
+_VALID_STUDY_FONTS = {"handwriting", "serif", "sans", "soft", "typewriter"}
+_VALID_STUDY_GLITTERS = {
+    "default",
+    "glitter-blue",
+    "royal-violet",
+    "rose-glitter",
+    "golden-sparkle",
+    "emerald-glow",
+    "aqua-crystal",
+    "sunset-copper",
+    "pink-diamond",
+    "sapphire",
+    "champagne-gold",
+    "amethyst",
+    "mint-crystal",
+}
+_VALID_BLOCK_TYPES = {"paragraph", "heading", "bulletList", "orderedList", "romanList"}
+_VALID_LEARNING_STATUSES = {"understood", "needs_revision"}
+
+
+def _validate_study_runs(runs: Any) -> List[Dict[str, Any]]:
+    if not isinstance(runs, list):
+        raise HTTPException(status_code=400, detail="Invalid rich-text runs structure.")
+    out: List[Dict[str, Any]] = []
+    for r in runs:
+        if not isinstance(r, dict) or not isinstance(r.get("text"), str):
+            raise HTTPException(status_code=400, detail="Each rich-text run must contain a string 'text' field.")
+        font = str(r.get("font") or "handwriting")
+        if font not in _VALID_STUDY_FONTS:
+            font = "handwriting"
+        glitter = str(r.get("glitter") or "default")
+        if glitter not in _VALID_STUDY_GLITTERS:
+            glitter = "default"
+        clean_run: Dict[str, Any] = {
+            "text": r["text"],
+            "bold": bool(r.get("bold", False)),
+            "italic": bool(r.get("italic", False)),
+            "underline": bool(r.get("underline", False)),
+            "font": font,
+            "glitter": glitter,
+        }
+        if isinstance(r.get("color"), str) and r["color"].strip():
+            clean_run["color"] = r["color"].strip()[:40]
+        out.append(clean_run)
+    return out
+
+
+def _validate_study_pages(pages: Any) -> List[Dict[str, Any]]:
+    if not isinstance(pages, list):
+        raise HTTPException(status_code=400, detail="Study journal pages must be an ordered list of structured documents.")
+    if len(pages) == 0:
+        return [{"type": "doc", "blocks": [{"type": "paragraph", "runs": []}]}]
+    if len(pages) > 200:
+        raise HTTPException(status_code=400, detail="A study journal entry cannot exceed 200 pages.")
+    clean_pages: List[Dict[str, Any]] = []
+    for page in pages:
+        if not isinstance(page, dict) or page.get("type") != "doc" or not isinstance(page.get("blocks"), list):
+            raise HTTPException(status_code=400, detail="Each study journal page must be a valid 'doc' object with 'blocks'.")
+        clean_blocks: List[Dict[str, Any]] = []
+        for blk in page["blocks"]:
+            if not isinstance(blk, dict):
+                raise HTTPException(status_code=400, detail="Malformed block in study journal document.")
+            btype = blk.get("type")
+            if btype not in _VALID_BLOCK_TYPES:
+                raise HTTPException(status_code=400, detail=f"Unsupported block type: {btype}")
+            if btype in ("paragraph", "heading"):
+                clean_blk: Dict[str, Any] = {
+                    "type": btype,
+                    "runs": _validate_study_runs(blk.get("runs", [])),
+                }
+                if btype == "heading":
+                    lvl = blk.get("level", 1)
+                    clean_blk["level"] = lvl if lvl in (1, 2, 3) else 1
+                clean_blocks.append(clean_blk)
+            else:
+                raw_items = blk.get("items")
+                if not isinstance(raw_items, list):
+                    raise HTTPException(status_code=400, detail="List block must contain 'items'.")
+                clean_items = [_validate_study_runs(it) for it in raw_items]
+                clean_blocks.append({"type": btype, "items": clean_items})
+        if not clean_blocks:
+            clean_blocks = [{"type": "paragraph", "runs": []}]
+        clean_pages.append({"type": "doc", "blocks": clean_blocks})
+    return clean_pages
+
+
+def _extract_study_full_text(pages: List[Dict[str, Any]]) -> str:
+    parts: List[str] = []
+    for page in pages:
+        for blk in page.get("blocks", []):
+            if blk.get("type") in ("paragraph", "heading"):
+                txt = "".join(r.get("text", "") for r in blk.get("runs", []))
+                if txt.strip():
+                    parts.append(txt.strip())
+            else:
+                for item in blk.get("items", []):
+                    txt = "".join(r.get("text", "") for r in item)
+                    if txt.strip():
+                        parts.append(txt.strip())
+    return " ".join(parts)
+
+
+def _extract_study_preview(pages: List[Dict[str, Any]]) -> str:
+    joined = _extract_study_full_text(pages)
+    return joined[:180] + ("..." if len(joined) > 180 else "")
+
+
+def _validate_study_duration(duration: Any) -> int:
+    if not isinstance(duration, int) or isinstance(duration, bool):
+        raise HTTPException(status_code=400, detail="Study duration must be an integer number of minutes.")
+    if duration < 0 or duration > 1440:
+        raise HTTPException(status_code=400, detail="Study duration must be between 0 and 1440 minutes.")
+    return duration
+
+
+def _validate_learning_status(status: Optional[str]) -> str:
+    val = (status or "understood").strip().lower()
+    if val not in _VALID_LEARNING_STATUSES:
+        raise HTTPException(status_code=400, detail="Learning status must be 'understood' or 'needs_revision'.")
+    return val
+
+
+def _format_study_journal_entry(row: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        pages = json.loads(row.get("pages_json") or "[]")
+        if not isinstance(pages, list) or len(pages) == 0:
+            pages = [{"type": "doc", "blocks": [{"type": "paragraph", "runs": []}]}]
+    except Exception:
+        pages = [{"type": "doc", "blocks": [{"type": "paragraph", "runs": []}]}]
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "title": row.get("title") or "",
+        "subject": row.get("subject") or "",
+        "topic": row.get("topic") or "",
+        "chapter_or_module": row.get("chapter_or_module") or "",
+        "study_date": row["study_date"],
+        "duration_minutes": int(row.get("duration_minutes") or 0),
+        "learning_status": row.get("learning_status") or "understood",
+        "key_concepts": row.get("key_concepts") or "",
+        "learning_outcomes": row.get("learning_outcomes") or "",
+        "revision_notes": row.get("revision_notes") or "",
+        "pages": pages,
+        "page_count": len(pages),
+        "preview": _extract_study_preview(pages),
+        "is_draft": bool(row.get("is_draft", 0)),
+        "client_draft_key": row.get("client_draft_key") or "",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+@app.get("/api/study-journal")
+def list_study_journal_entries(
+    search: Optional[str] = Query(default=None),
+    subject: Optional[str] = Query(default=None),
+    study_date: Optional[str] = Query(default=None),
+    learning_status: Optional[str] = Query(default=None),
+    sort: str = Query(default="newest"),
+    include_drafts: bool = Query(default=True),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    order_dir = "ASC" if sort == "oldest" else "DESC"
+    with get_db() as conn:
+        sql = "SELECT * FROM study_journal_entries WHERE user_id = ?"
+        params: List[Any] = [uid]
+        if not include_drafts:
+            sql += " AND is_draft = 0"
+        if subject and subject.strip():
+            sql += " AND LOWER(subject) = LOWER(?)"
+            params.append(subject.strip())
+        if study_date and study_date.strip():
+            sql += " AND study_date = ?"
+            params.append(study_date.strip()[:10])
+        if learning_status and learning_status.strip():
+            sql += " AND learning_status = ?"
+            params.append(_validate_learning_status(learning_status))
+        sql += f" ORDER BY study_date {order_dir}, updated_at {order_dir}"
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    entries = [_format_study_journal_entry(r) for r in rows]
+    if search and search.strip():
+        q = search.strip().lower()
+        entries = [
+            e
+            for e in entries
+            if q in e["title"].lower()
+            or q in e["subject"].lower()
+            or q in e["topic"].lower()
+            or q in e["chapter_or_module"].lower()
+            or q in e["key_concepts"].lower()
+            or q in e["learning_outcomes"].lower()
+            or q in e["revision_notes"].lower()
+            or q in _extract_study_full_text(e["pages"]).lower()
+        ]
+    return {"entries": entries}
+
+
+@app.get("/api/study-journal/draft")
+def get_latest_study_journal_draft(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM study_journal_entries WHERE user_id = ? AND is_draft = 1 ORDER BY updated_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+    return {"draft": _format_study_journal_entry(row) if row else None}
+
+
+@app.get("/api/study-journal/{entry_id}")
+def get_study_journal_entry(
+    entry_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM study_journal_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Study journal entry not found.")
+    return {"entry": _format_study_journal_entry(row)}
+
+
+@app.post("/api/study-journal")
+def create_study_journal_entry(
+    req: StudyJournalCreateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    pages = _validate_study_pages(req.pages)
+    title = (req.title or "").strip()
+    subject = (req.subject or "").strip()
+    topic = (req.topic or "").strip()
+    duration = _validate_study_duration(req.duration_minutes)
+    status = _validate_learning_status(req.learning_status)
+    study_date = _validate_diary_date(req.study_date)
+
+    if not req.is_draft and (not subject or not topic):
+        raise HTTPException(status_code=400, detail="Subject name and topic studied are required to save a study journal entry.")
+
+    draft_key = (req.client_draft_key or "").strip()
+    now = utc_now()
+
+    with get_db(commit=True) as conn:
+        if draft_key:
+            existing = conn.execute(
+                "SELECT * FROM study_journal_entries WHERE user_id = ? AND client_draft_key = ? LIMIT 1",
+                (uid, draft_key),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE study_journal_entries
+                    SET title = ?, subject = ?, topic = ?, chapter_or_module = ?, study_date = ?,
+                        duration_minutes = ?, learning_status = ?, key_concepts = ?,
+                        learning_outcomes = ?, revision_notes = ?, pages_json = ?,
+                        is_draft = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (
+                        title,
+                        subject,
+                        topic,
+                        (req.chapter_or_module or "").strip(),
+                        study_date,
+                        duration,
+                        status,
+                        (req.key_concepts or "").strip(),
+                        (req.learning_outcomes or "").strip(),
+                        (req.revision_notes or "").strip(),
+                        json.dumps(pages),
+                        1 if req.is_draft else 0,
+                        now,
+                        existing["id"],
+                        uid,
+                    ),
+                )
+                updated = conn.execute(
+                    "SELECT * FROM study_journal_entries WHERE id = ? AND user_id = ?",
+                    (existing["id"], uid),
+                ).fetchone()
+                return {"entry": _format_study_journal_entry(updated)}
+
+        entry_id = new_id("sjournal")
+        conn.execute(
+            """
+            INSERT INTO study_journal_entries (
+                id, user_id, title, subject, topic, chapter_or_module, study_date,
+                duration_minutes, learning_status, key_concepts, learning_outcomes,
+                revision_notes, pages_json, is_draft, client_draft_key, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entry_id,
+                uid,
+                title,
+                subject,
+                topic,
+                (req.chapter_or_module or "").strip(),
+                study_date,
+                duration,
+                status,
+                (req.key_concepts or "").strip(),
+                (req.learning_outcomes or "").strip(),
+                (req.revision_notes or "").strip(),
+                json.dumps(pages),
+                1 if req.is_draft else 0,
+                draft_key,
+                now,
+                now,
+            ),
+        )
+        created = conn.execute(
+            "SELECT * FROM study_journal_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+    return {"entry": _format_study_journal_entry(created)}
+
+
+@app.put("/api/study-journal/{entry_id}")
+def update_study_journal_entry(
+    entry_id: str,
+    req: StudyJournalUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    now = utc_now()
+    with get_db(commit=True) as conn:
+        existing = conn.execute(
+            "SELECT * FROM study_journal_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Study journal entry not found.")
+
+        title = existing["title"] if req.title is None else req.title.strip()
+        subject = existing["subject"] if req.subject is None else req.subject.strip()
+        topic = existing["topic"] if req.topic is None else req.topic.strip()
+        chapter = existing["chapter_or_module"] if req.chapter_or_module is None else req.chapter_or_module.strip()
+        study_date = existing["study_date"] if req.study_date is None else _validate_diary_date(req.study_date)
+        duration = existing["duration_minutes"] if req.duration_minutes is None else _validate_study_duration(req.duration_minutes)
+        status = existing["learning_status"] if req.learning_status is None else _validate_learning_status(req.learning_status)
+        key_concepts = existing["key_concepts"] if req.key_concepts is None else req.key_concepts.strip()
+        outcomes = existing["learning_outcomes"] if req.learning_outcomes is None else req.learning_outcomes.strip()
+        rev_notes = existing["revision_notes"] if req.revision_notes is None else req.revision_notes.strip()
+        pages = _format_study_journal_entry(existing)["pages"] if req.pages is None else _validate_study_pages(req.pages)
+        is_draft = bool(existing["is_draft"]) if req.is_draft is None else bool(req.is_draft)
+
+        if not is_draft and (not subject or not topic):
+            raise HTTPException(status_code=400, detail="Subject name and topic studied are required to save a study journal entry.")
+
+        conn.execute(
+            """
+            UPDATE study_journal_entries
+            SET title = ?, subject = ?, topic = ?, chapter_or_module = ?, study_date = ?,
+                duration_minutes = ?, learning_status = ?, key_concepts = ?,
+                learning_outcomes = ?, revision_notes = ?, pages_json = ?,
+                is_draft = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                title,
+                subject,
+                topic,
+                chapter,
+                study_date,
+                duration,
+                status,
+                key_concepts,
+                outcomes,
+                rev_notes,
+                json.dumps(pages),
+                1 if is_draft else 0,
+                now,
+                entry_id,
+                uid,
+            ),
+        )
+        updated = conn.execute(
+            "SELECT * FROM study_journal_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+    return {"entry": _format_study_journal_entry(updated)}
+
+
+@app.delete("/api/study-journal/{entry_id}")
+def delete_study_journal_entry(
+    entry_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        existing = conn.execute(
+            "SELECT id FROM study_journal_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Study journal entry not found.")
+        conn.execute(
+            "DELETE FROM study_journal_entries WHERE id = ? AND user_id = ?",
+            (entry_id, uid),
+        )
+    return {"ok": True, "deleted_entry_id": entry_id}
 
 
 # --- SECTION C: 20-MCQ EXAMINATION ENGINE & ATTEMPT HISTORY ---
@@ -2140,6 +2952,32 @@ def submit_topic_quiz(
             phase_id=topic["phase_id"],
         )
     return {"attempt": attempt}
+
+
+@app.post("/api/topics/{topic_id}/quiz/regenerate")
+def regenerate_topic_quiz(
+    topic_id: str,
+    req: Optional[RegenerateRequest] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        topic = conn.execute("SELECT * FROM roadmap_topics WHERE id = ? AND user_id = ?", (topic_id, uid)).fetchone()
+        if not topic:
+            raise HTTPException(status_code=404, detail="Topic not found or access denied.")
+        jobs = enqueue_topic_resource_jobs(
+            conn,
+            uid,
+            topic["roadmap_id"],
+            topic["phase_id"],
+            topic_id,
+            resource_types=["quiz"],
+            force_regenerate=True,
+        )
+        job_id = jobs[0]["id"]
+
+    execute_job_sync(job_id, force_overwrite=True)
+    return get_topic_workspace(topic_id, auto_prepare=False, current_user=current_user)
 
 
 @app.get("/api/quizzes/attempts")
@@ -2330,6 +3168,22 @@ def _format_studio_output(conn, row: Dict[str, Any]) -> Dict[str, Any]:
         ).fetchall()
         content["cards"] = cards
 
+    # IMPORTANT RULE (Security Area D):
+    # Never expose correct_index or explanations in pre-submission AI Studio Quiz responses!
+    if row["tool_type"] == "quiz":
+        raw_questions = content.get("questions") or []
+        content["questions"] = [
+            {
+                "id": q.get("id", f"q_{idx + 1}"),
+                "number": q.get("number", idx + 1),
+                "category": q.get("category", "Core"),
+                "difficulty": q.get("difficulty", content.get("difficulty", "Intermediate")),
+                "question": q.get("question", ""),
+                "options": q.get("options", []),
+            }
+            for idx, q in enumerate(raw_questions)
+        ]
+
     # Resolve associated source document titles for AI Studio Library cards
     source_titles: List[Dict[str, str]] = []
     if source_ids:
@@ -2358,527 +3212,6 @@ def _format_studio_output(conn, row: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
-
-
-@app.get("/api/studio/outputs")
-def list_studio_outputs(
-    tool_type: Optional[str] = Query(default=None),
-    language: Optional[str] = Query(default=None),
-    search: Optional[str] = Query(default=None),
-    sort: Optional[str] = Query(default="newest"),
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    with get_db() as conn:
-        if tool_type and tool_type != "all":
-            rows = conn.execute(
-                "SELECT * FROM studio_outputs WHERE user_id = ? AND tool_type = ? ORDER BY created_at DESC",
-                (uid, tool_type),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM studio_outputs WHERE user_id = ? ORDER BY created_at DESC",
-                (uid,),
-            ).fetchall()
-        items = [_format_studio_output(conn, r) for r in rows]
-
-    if language and language != "all":
-        items = [i for i in items if (i.get("language") or "English").lower() == language.strip().lower()]
-
-    if search and search.strip():
-        q = search.strip().lower()
-        items = [
-            i
-            for i in items
-            if q in i["title"].lower()
-            or q in i["tool_type"].lower()
-            or q in (i.get("language") or "").lower()
-            or any(q in s["title"].lower() for s in (i.get("source_titles") or []))
-        ]
-
-    if sort == "oldest":
-        items.sort(key=lambda x: x["created_at"])
-    elif sort == "title":
-        items.sort(key=lambda x: x["title"].lower())
-    else:
-        items.sort(key=lambda x: x["created_at"], reverse=True)
-
-    return {"outputs": items, "total_count": len(items), "supported_languages": SUPPORTED_LANGUAGES}
-
-
-@app.post("/api/studio/generate")
-def generate_studio_tool_output(
-    req: StudioGenerateRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    if req.tool_type not in VALID_STUDIO_TOOLS:
-        raise HTTPException(status_code=400, detail=f"Invalid AI Studio tool '{req.tool_type}'.")
-
-    output_id = new_id("std")
-    now = utc_now()
-    language = normalize_language(req.config.get("language") or "English")
-    req.config["language"] = language
-    if req.title:
-        req.config["title"] = req.title.strip()
-
-    with get_db(commit=True) as conn:
-        prefs = ensure_user_preferences(conn, uid)
-        query_hint = req.config.get("topic") or req.config.get("instructions") or req.title or req.tool_type
-        chunks = retrieve_relevant_chunks(conn, uid, req.source_ids, str(query_hint), top_k=10)
-        openai_key = (prefs.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or "").strip()
-
-        audio_path = ""
-        video_path = ""
-        duration_label = str(req.config.get("duration") or req.config.get("video_duration") or "")
-        style_label = str(req.config.get("style") or "")
-
-        if req.tool_type == "audio_overview":
-            content = generateAudioScript(chunks, req.config, user_prefs=prefs)
-            audio_meta = synthesize_podcast_audio(
-                output_id,
-                content["dialogue"],
-                openai_api_key=openai_key,
-                language=language,
-            )
-            content["audio"] = audio_meta
-            audio_path = audio_meta["file_path"]
-
-        elif req.tool_type == "slide_deck":
-            content = generateSlideDeck(chunks, req.config, user_prefs=prefs)
-
-        elif req.tool_type == "video_overview":
-            content = generateVideoStoryboard(chunks, req.config, user_prefs=prefs)
-            dur_lbl = duration_label or "3–5 minutes"
-            sty_lbl = style_label or "Concept Breakdown & Architecture"
-            video_meta = synthesize_educational_video(
-                output_id=output_id,
-                storyboard=content,
-                language=language,
-                duration_label=dur_lbl,
-                style_label=sty_lbl,
-                openai_api_key=openai_key,
-            )
-            content["video"] = video_meta
-            video_path = video_meta["file_path"]
-            audio_path = video_meta["audio_file_path"]
-            duration_label = dur_lbl
-            style_label = sty_lbl
-
-        elif req.tool_type == "mind_map":
-            content = generateMindMap(chunks, req.config, user_prefs=prefs)
-
-        elif req.tool_type == "study_guide":
-            content = generateStudyGuide(chunks, req.config, user_prefs=prefs)
-
-        elif req.tool_type == "flashcards":
-            content = generateFlashcards(chunks, req.config, user_prefs=prefs)
-
-        elif req.tool_type == "quiz":
-            q_count = int(req.config.get("question_count") or 20)
-            diff = req.config.get("difficulty") or "Intermediate"
-            topic_name = req.config.get("topic") or (chunks[0]["source_title"] if chunks else "Source Mastery Exam")
-            content = generateTopicQuiz(
-                topic_title=topic_name,
-                topic_description=f"Source-grounded assessment from {len(req.source_ids)} selected source(s).",
-                difficulty=diff,
-                question_count=q_count,
-                source_passages=chunks,
-                user_prefs=prefs,
-                language=language,
-            )
-            content["practice_mode_allowed"] = bool(req.config.get("practice_mode", False))
-
-        elif req.tool_type == "infographic":
-            content = generateInfographicStructure(chunks, req.config, user_prefs=prefs)
-
-        elif req.tool_type == "data_table":
-            content = extractStructuredTable(chunks, req.config, user_prefs=prefs)
-
-        content["language"] = language
-        final_title = (req.title or content.get("title") or f"BRAINOVA Studio: {req.tool_type}").strip()
-        conn.execute(
-            """
-            INSERT INTO studio_outputs (
-                id, user_id, tool_type, title, source_ids_json, config_json,
-                content_json, audio_file_path, video_file_path, language, duration_label, style_label,
-                status, is_user_edited, error_message, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 0, '', ?, ?)
-            """,
-            (
-                output_id,
-                uid,
-                req.tool_type,
-                final_title,
-                json.dumps(req.source_ids),
-                json.dumps(req.config),
-                json.dumps(content),
-                audio_path,
-                video_path,
-                language,
-                duration_label,
-                style_label,
-                now,
-                now,
-            ),
-        )
-
-        # If flashcards tool, persist individual flashcards in `flashcards` table with status = 'new'
-        if req.tool_type == "flashcards":
-            for card in content.get("cards", []):
-                conn.execute(
-                    """
-                    INSERT INTO flashcards (
-                        id, user_id, studio_output_id, topic_id, front, back, hint, category,
-                        status, review_count, ease_factor, interval_days, next_due_at, last_reviewed_at,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'new', 0, 2.5, 0, ?, '', ?, ?)
-                    """,
-                    (
-                        new_id("fc"),
-                        uid,
-                        output_id,
-                        card["front"],
-                        card["back"],
-                        card.get("hint", ""),
-                        card.get("category", "Core"),
-                        now,
-                        now,
-                        now,
-                    ),
-                )
-
-        log_activity(conn, uid, f"studio_{req.tool_type}", "studio_output", output_id, f"Generated {final_title}", 6)
-        saved_row = conn.execute("SELECT * FROM studio_outputs WHERE id = ? AND user_id = ?", (output_id, uid)).fetchone()
-        formatted = _format_studio_output(conn, saved_row)
-
-    return {"output": formatted}
-
-
-@app.get("/api/studio/outputs/{output_id}")
-def get_studio_output(
-    output_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM studio_outputs WHERE id = ? AND user_id = ?", (output_id, uid)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Studio output not found or access denied.")
-        formatted = _format_studio_output(conn, row)
-    return {"output": formatted}
-
-
-@app.put("/api/studio/outputs/{output_id}")
-def update_studio_output(
-    output_id: str,
-    req: StudioUpdateRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    with get_db(commit=True) as conn:
-        row = conn.execute("SELECT * FROM studio_outputs WHERE id = ? AND user_id = ?", (output_id, uid)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Studio output not found.")
-        new_title = req.title.strip() if req.title else row["title"]
-        new_content_json = json.dumps(req.content) if req.content is not None else row["content_json"]
-        edited_flag = 1 if req.content is not None else row["is_user_edited"]
-
-        conn.execute(
-            """
-            UPDATE studio_outputs
-            SET title = ?, content_json = ?, is_user_edited = ?, updated_at = ?
-            WHERE id = ? AND user_id = ?
-            """,
-            (new_title, new_content_json, edited_flag, utc_now(), output_id, uid),
-        )
-        updated_row = conn.execute("SELECT * FROM studio_outputs WHERE id = ? AND user_id = ?", (output_id, uid)).fetchone()
-        formatted = _format_studio_output(conn, updated_row)
-    return {"output": formatted}
-
-
-@app.post("/api/studio/outputs/{output_id}/regenerate")
-def regenerate_studio_output(
-    output_id: str,
-    req: RegenerateRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    with get_db(commit=True) as conn:
-        row = conn.execute("SELECT * FROM studio_outputs WHERE id = ? AND user_id = ?", (output_id, uid)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Studio output not found.")
-        if row.get("is_user_edited") and not req.confirm_overwrite:
-            raise HTTPException(
-                status_code=409,
-                detail="You have personal edits on this Studio output. Please confirm overwrite before regenerating.",
-            )
-        source_ids = json.loads(row.get("source_ids_json") or "[]")
-        config = json.loads(row.get("config_json") or "{}")
-        language = normalize_language(row.get("language") or config.get("language") or "English")
-        config["language"] = language
-        tool_type = row["tool_type"]
-        prefs = ensure_user_preferences(conn, uid)
-        chunks = retrieve_relevant_chunks(conn, uid, source_ids, row["title"], top_k=10)
-        openai_key = (prefs.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or "").strip()
-
-        audio_path = row.get("audio_file_path", "")
-        video_path = row.get("video_file_path", "")
-        if tool_type == "audio_overview":
-            content = generateAudioScript(chunks, config, user_prefs=prefs)
-            audio_meta = synthesize_podcast_audio(output_id, content["dialogue"], openai_api_key=openai_key, language=language)
-            content["audio"] = audio_meta
-            audio_path = audio_meta["file_path"]
-        elif tool_type == "slide_deck":
-            content = generateSlideDeck(chunks, config, user_prefs=prefs)
-        elif tool_type == "video_overview":
-            content = generateVideoStoryboard(chunks, config, user_prefs=prefs)
-            video_meta = synthesize_educational_video(
-                output_id=output_id,
-                storyboard=content,
-                language=language,
-                duration_label=str(config.get("duration") or "3–5 minutes"),
-                style_label=str(config.get("style") or "Concept Breakdown & Architecture"),
-                openai_api_key=openai_key,
-            )
-            content["video"] = video_meta
-            video_path = video_meta["file_path"]
-            audio_path = video_meta["audio_file_path"]
-        elif tool_type == "mind_map":
-            content = generateMindMap(chunks, config, user_prefs=prefs)
-        elif tool_type == "study_guide":
-            content = generateStudyGuide(chunks, config, user_prefs=prefs)
-        elif tool_type == "flashcards":
-            content = generateFlashcards(chunks, config, user_prefs=prefs)
-        elif tool_type == "quiz":
-            content = generateTopicQuiz(
-                topic_title=row["title"],
-                difficulty=config.get("difficulty", "Intermediate"),
-                question_count=int(config.get("question_count") or 20),
-                source_passages=chunks,
-                user_prefs=prefs,
-                language=language,
-            )
-        elif tool_type == "infographic":
-            content = generateInfographicStructure(chunks, config, user_prefs=prefs)
-        else:
-            content = extractStructuredTable(chunks, config, user_prefs=prefs)
-
-        conn.execute(
-            """
-            UPDATE studio_outputs
-            SET content_json = ?, audio_file_path = ?, video_file_path = ?, is_user_edited = 0, updated_at = ?
-            WHERE id = ? AND user_id = ?
-            """,
-            (json.dumps(content), audio_path, video_path, utc_now(), output_id, uid),
-        )
-        updated_row = conn.execute("SELECT * FROM studio_outputs WHERE id = ? AND user_id = ?", (output_id, uid)).fetchone()
-        formatted = _format_studio_output(conn, updated_row)
-    return {"output": formatted}
-
-
-@app.delete("/api/studio/outputs/{output_id}")
-def delete_studio_output(
-    output_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Deletes ONLY the selected AI Studio output; never deletes original source documents."""
-    uid = current_user["id"]
-    with get_db(commit=True) as conn:
-        row = conn.execute("SELECT * FROM studio_outputs WHERE id = ? AND user_id = ?", (output_id, uid)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Studio output not found.")
-        audio_path = row.get("audio_file_path", "")
-        video_path = row.get("video_file_path", "")
-        conn.execute("DELETE FROM studio_outputs WHERE id = ? AND user_id = ?", (output_id, uid))
-
-    for p in (audio_path, video_path):
-        if p and os.path.exists(p):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-    return {"ok": True, "deleted_id": output_id}
-
-
-@app.get("/api/studio/audio/{filename}")
-def stream_studio_audio(
-    filename: str,
-    playback_token: Optional[str] = Query(default=None),
-) -> FileResponse:
-    safe_name = os.path.basename(filename)
-    if not safe_name.lower().endswith(".wav") or not playback_token:
-        raise HTTPException(status_code=401, detail="A valid audio playback link is required.")
-
-    token_id = safe_name[:-4]
-    user_id = decode_audio_playback_token(playback_token, token_id)
-    base_output_id = token_id[:-4] if token_id.endswith("_vid") else token_id
-    with get_db() as conn:
-        output = conn.execute(
-            "SELECT audio_file_path FROM studio_outputs WHERE id = ? AND user_id = ? AND tool_type IN ('audio_overview', 'video_overview')",
-            (base_output_id, user_id),
-        ).fetchone()
-
-    expected_path = os.path.realpath(os.path.join(AUDIO_DIR, safe_name))
-    stored_path = os.path.realpath(output.get("audio_file_path") or "") if output else ""
-    if not output or stored_path != expected_path or not os.path.isfile(expected_path):
-        raise HTTPException(status_code=404, detail="Audio file not found.")
-    return FileResponse(expected_path, media_type="audio/wav", filename=safe_name)
-
-
-@app.get("/api/studio/video/{filename}")
-def stream_studio_video(
-    filename: str,
-    playback_token: Optional[str] = Query(default=None),
-) -> FileResponse:
-    safe_name = os.path.basename(filename)
-    if not safe_name.lower().endswith(".mp4") or not playback_token:
-        raise HTTPException(status_code=401, detail="A valid video playback link is required.")
-
-    output_id = safe_name[:-4]
-    user_id = decode_video_playback_token(playback_token, output_id)
-    with get_db() as conn:
-        output = conn.execute(
-            "SELECT video_file_path FROM studio_outputs WHERE id = ? AND user_id = ? AND tool_type = 'video_overview'",
-            (output_id, user_id),
-        ).fetchone()
-
-    expected_path = os.path.realpath(os.path.join(VIDEOS_DIR, safe_name))
-    stored_path = os.path.realpath(output.get("video_file_path") or "") if output else ""
-    if not output or stored_path != expected_path or not os.path.isfile(expected_path):
-        raise HTTPException(status_code=404, detail="Video file not found.")
-    return FileResponse(expected_path, media_type="video/mp4", filename=safe_name)
-
-
-@app.post("/api/studio/outputs/{output_id}/quiz-submit")
-def submit_studio_quiz(
-    output_id: str,
-    req: QuizSubmissionRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    with get_db(commit=True) as conn:
-        row = conn.execute("SELECT * FROM studio_outputs WHERE id = ? AND user_id = ? AND tool_type = 'quiz'", (output_id, uid)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Studio Quiz not found.")
-        content = json.loads(row.get("content_json") or "{}")
-        questions = content.get("questions", [])
-        attempt = _grade_and_record_quiz_submission(
-            conn=conn,
-            user_id=uid,
-            questions=questions,
-            submitted_answers=req.answers,
-            duration_seconds=req.duration_seconds,
-            topic_title=row["title"],
-            studio_output_id=output_id,
-        )
-    return {"attempt": attempt}
-
-
-# --- FLASHCARD CRUD & SPACED REPETITION REVIEW ---
-@app.post("/api/flashcards")
-def create_flashcard(
-    req: FlashcardCreateRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    fc_id = new_id("fc")
-    now = utc_now()
-    with get_db(commit=True) as conn:
-        if req.studio_output_id:
-            deck = conn.execute("SELECT id FROM studio_outputs WHERE id = ? AND user_id = ?", (req.studio_output_id, uid)).fetchone()
-            if not deck:
-                raise HTTPException(status_code=404, detail="Flashcard deck not found.")
-        conn.execute(
-            """
-            INSERT INTO flashcards (
-                id, user_id, studio_output_id, topic_id, front, back, hint, category,
-                status, review_count, ease_factor, interval_days, next_due_at, last_reviewed_at,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', 0, 2.5, 0, ?, '', ?, ?)
-            """,
-            (fc_id, uid, req.studio_output_id, req.topic_id, req.front.strip(), req.back.strip(), req.hint.strip(), req.category.strip(), now, now, now),
-        )
-        card = conn.execute("SELECT * FROM flashcards WHERE id = ? AND user_id = ?", (fc_id, uid)).fetchone()
-    return {"flashcard": card}
-
-
-@app.put("/api/flashcards/{card_id}")
-def update_or_review_flashcard(
-    card_id: str,
-    req: FlashcardUpdateRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    with get_db(commit=True) as conn:
-        card = conn.execute("SELECT * FROM flashcards WHERE id = ? AND user_id = ?", (card_id, uid)).fetchone()
-        if not card:
-            raise HTTPException(status_code=404, detail="Flashcard not found.")
-
-        now_dt = datetime.now(timezone.utc)
-        now_iso = now_dt.isoformat()
-        new_status = req.status if req.status in ("new", "learning", "review", "known") else card["status"]
-        rev_count = card["review_count"]
-        interval = card["interval_days"]
-        ease = card["ease_factor"]
-        next_due = card["next_due_at"]
-        last_rev = card["last_reviewed_at"]
-
-        if req.status in ("learning", "review", "known"):
-            rev_count += 1
-            last_rev = now_iso
-            if req.status == "known":
-                interval = max(1, (interval * 2) if interval > 0 else 3)
-                ease = min(3.0, ease + 0.1)
-                next_due = (now_dt + timedelta(days=interval)).isoformat()
-            elif req.status == "learning":
-                interval = 1
-                next_due = (now_dt + timedelta(days=1)).isoformat()
-            else:  # 'review' (needs review soon)
-                interval = 0
-                ease = max(1.3, ease - 0.2)
-                next_due = (now_dt + timedelta(hours=4)).isoformat()
-
-        conn.execute(
-            """
-            UPDATE flashcards
-            SET front = ?, back = ?, hint = ?, category = ?, status = ?,
-                review_count = ?, ease_factor = ?, interval_days = ?,
-                next_due_at = ?, last_reviewed_at = ?, updated_at = ?
-            WHERE id = ? AND user_id = ?
-            """,
-            (
-                req.front.strip() if req.front else card["front"],
-                req.back.strip() if req.back else card["back"],
-                req.hint.strip() if req.hint is not None else card["hint"],
-                req.category.strip() if req.category else card["category"],
-                new_status,
-                rev_count,
-                ease,
-                interval,
-                next_due,
-                last_rev,
-                now_iso,
-                card_id,
-                uid,
-            ),
-        )
-        updated = conn.execute("SELECT * FROM flashcards WHERE id = ? AND user_id = ?", (card_id, uid)).fetchone()
-    return {"flashcard": updated}
-
-
-@app.delete("/api/flashcards/{card_id}")
-def delete_flashcard(
-    card_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> Dict[str, Any]:
-    uid = current_user["id"]
-    with get_db(commit=True) as conn:
-        card = conn.execute("SELECT id FROM flashcards WHERE id = ? AND user_id = ?", (card_id, uid)).fetchone()
-        if not card:
-            raise HTTPException(status_code=404, detail="Flashcard not found.")
-        conn.execute("DELETE FROM flashcards WHERE id = ? AND user_id = ?", (card_id, uid))
-    return {"ok": True, "deleted_id": card_id}
 
 
 # ============================================================================
@@ -2910,8 +3243,8 @@ def get_dashboard_summary(current_user: Dict[str, Any] = Depends(get_current_use
             """
             SELECT t.*, r.title AS roadmap_title, p.title AS phase_title
             FROM roadmap_topics t
-            JOIN roadmaps r ON r.id = t.roadmap_id
-            JOIN roadmap_phases p ON p.id = t.phase_id
+            JOIN roadmaps r ON r.id = t.roadmap_id AND r.user_id = t.user_id
+            JOIN roadmap_phases p ON p.id = t.phase_id AND p.user_id = t.user_id
             WHERE t.user_id = ?
             ORDER BY r.updated_at DESC, p.phase_order ASC, t.topic_order ASC
             """,
@@ -3126,8 +3459,8 @@ def get_all_learning_resources(
             """
             SELECT n.*, t.title AS topic_title, r.title AS roadmap_title
             FROM personal_notes n
-            LEFT JOIN roadmap_topics t ON t.id = n.topic_id
-            LEFT JOIN roadmaps r ON r.id = n.roadmap_id
+            LEFT JOIN roadmap_topics t ON t.id = n.topic_id AND t.user_id = n.user_id
+            LEFT JOIN roadmaps r ON r.id = n.roadmap_id AND r.user_id = n.user_id
             WHERE n.user_id = ?
             ORDER BY n.is_pinned DESC, n.updated_at DESC
             """,
@@ -3137,8 +3470,8 @@ def get_all_learning_resources(
             """
             SELECT tut.*, t.title AS topic_title, r.title AS roadmap_title
             FROM topic_tutorials tut
-            JOIN roadmap_topics t ON t.id = tut.topic_id
-            JOIN roadmaps r ON r.id = tut.roadmap_id
+            JOIN roadmap_topics t ON t.id = tut.topic_id AND t.user_id = tut.user_id
+            JOIN roadmaps r ON r.id = tut.roadmap_id AND r.user_id = tut.user_id
             WHERE tut.user_id = ?
             ORDER BY tut.updated_at DESC
             """,
@@ -3150,8 +3483,8 @@ def get_all_learning_resources(
                    rd.has_custom_reading, rd.custom_title, rd.version, rd.updated_at,
                    t.title AS topic_title, r.title AS roadmap_title
             FROM topic_readings rd
-            JOIN roadmap_topics t ON t.id = rd.topic_id
-            JOIN roadmaps r ON r.id = rd.roadmap_id
+            JOIN roadmap_topics t ON t.id = rd.topic_id AND t.user_id = rd.user_id
+            JOIN roadmaps r ON r.id = rd.roadmap_id AND r.user_id = rd.user_id
             WHERE rd.user_id = ?
             ORDER BY rd.updated_at DESC
             """,
@@ -3214,16 +3547,522 @@ def global_search(
             if query in src["title"].lower() or query in src["original_filename"].lower():
                 results.append({"type": "Source", "title": src["title"], "subtitle": src["original_filename"], "link": f"/sources?open={src['id']}"})
 
-        for std in conn.execute("SELECT id, title, tool_type FROM studio_outputs WHERE user_id = ?", (uid,)).fetchall():
-            if query in std["title"].lower() or query in std["tool_type"].lower():
-                results.append({"type": "AI Studio Library", "title": std["title"], "subtitle": std["tool_type"].replace("_", " ").title(), "link": f"/studio-library?open={std['id']}"})
-
         for nt in conn.execute("SELECT id, title, content, topic_id, roadmap_id FROM personal_notes WHERE user_id = ?", (uid,)).fetchall():
             if query in nt["title"].lower() or query in nt["content"].lower():
                 link = f"/roadmaps/{nt['roadmap_id']}?expand={nt['topic_id']}" if nt["roadmap_id"] and nt["topic_id"] else "/resources"
                 results.append({"type": "Note", "title": nt["title"], "subtitle": nt["content"][:80], "link": link})
 
     return {"results": results[:20]}
+
+
+# ============================================================================
+# STRICT FOCUS MODE — AUTHORITATIVE SESSIONS & DISTRACTION EVENT TRACKING
+# ============================================================================
+FOCUS_MIN_DURATION_SECONDS = 60
+FOCUS_MAX_DURATION_SECONDS = 14400
+FOCUS_MAX_SHORT_BREAK_MINUTES = 30
+
+FOCUS_EVENT_TYPES = {
+    "visibility_hidden",
+    "visibility_visible",
+    "window_blur",
+    "window_focus",
+    "fullscreen_entered",
+    "fullscreen_exited",
+    "fullscreen_failed",
+    "fullscreen_restored",
+    "external_navigation_blocked",
+    "keyboard_lock_failed",
+    "capability_unavailable",
+}
+
+FOCUS_DISTRACTION_EVENTS = {
+    "visibility_hidden",
+    "window_blur",
+    "fullscreen_exited",
+    "external_navigation_blocked",
+}
+
+
+class FocusSessionStartRequest(BaseModel):
+    duration_seconds: int
+    session_title: str = ""
+    short_break_minutes: int = 0
+    sound_enabled: bool = True
+    animations_enabled: bool = True
+    client_request_id: str = ""
+
+
+class FocusEventCreateRequest(BaseModel):
+    event_type: str
+    metadata: Optional[Dict[str, Any]] = None
+    occurred_at: Optional[str] = None
+
+
+def _parse_iso_utc(value: str) -> datetime:
+    cleaned = value.strip()
+    if cleaned.endswith("Z"):
+        cleaned = cleaned[:-1] + "+00:00"
+    dt = datetime.fromisoformat(cleaned)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _format_focus_session(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "session_title": row.get("session_title") or "",
+        "duration_seconds": int(row["duration_seconds"]),
+        "short_break_minutes": int(row.get("short_break_minutes") or 0),
+        "sound_enabled": bool(row.get("sound_enabled", 1)),
+        "animations_enabled": bool(row.get("animations_enabled", 1)),
+        "started_at": row["started_at"],
+        "ends_at": row["ends_at"],
+        "completed_at": row.get("completed_at") or "",
+        "status": row["status"],
+        "distraction_event_count": int(row.get("distraction_event_count") or 0),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _format_focus_event(row: Dict[str, Any]) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {}
+    raw_meta = row.get("metadata_json") or "{}"
+    try:
+        parsed = json.loads(raw_meta)
+        if isinstance(parsed, dict):
+            meta = parsed
+    except Exception:
+        meta = {}
+    return {
+        "id": row["id"],
+        "session_id": row["session_id"],
+        "user_id": row["user_id"],
+        "event_type": row["event_type"],
+        "occurred_at": row["occurred_at"],
+        "metadata": meta,
+    }
+
+
+def _reconcile_expired_focus_sessions(conn, user_id: str) -> Optional[Dict[str, Any]]:
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+    active_rows = conn.execute(
+        "SELECT * FROM focus_sessions WHERE user_id = ? AND status = 'active' ORDER BY started_at DESC",
+        (user_id,),
+    ).fetchall()
+    recently_completed: Optional[Dict[str, Any]] = None
+    for row in active_rows:
+        try:
+            ends_dt = _parse_iso_utc(row["ends_at"])
+        except Exception:
+            continue
+        if ends_dt <= now_dt:
+            completed_at = row["ends_at"]
+            conn.execute(
+                """
+                UPDATE focus_sessions
+                SET status = 'completed', completed_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'active'
+                """,
+                (completed_at, now_iso, row["id"], user_id),
+            )
+            title = (row.get("session_title") or "").strip() or "Strict Focus Session"
+            duration_mins = max(1, int(round(int(row["duration_seconds"]) / 60)))
+            log_activity(
+                conn,
+                user_id,
+                "focus_session_completed",
+                "focus_session",
+                row["id"],
+                f"Completed Focus: {title}",
+                duration_minutes=duration_mins,
+                metadata={"distraction_event_count": int(row.get("distraction_event_count") or 0)},
+            )
+            updated = conn.execute(
+                "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+                (row["id"], user_id),
+            ).fetchone()
+            if updated and recently_completed is None:
+                recently_completed = _format_focus_session(updated)
+    return recently_completed
+
+
+@app.post("/api/focus/sessions/start")
+def start_focus_session(
+    req: FocusSessionStartRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    if not isinstance(req.duration_seconds, int) or req.duration_seconds < FOCUS_MIN_DURATION_SECONDS or req.duration_seconds > FOCUS_MAX_DURATION_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Focus duration must be between {FOCUS_MIN_DURATION_SECONDS // 60} and {FOCUS_MAX_DURATION_SECONDS // 60} minutes.",
+        )
+    if req.short_break_minutes < 0 or req.short_break_minutes > FOCUS_MAX_SHORT_BREAK_MINUTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Short break must be between 0 and {FOCUS_MAX_SHORT_BREAK_MINUTES} minutes.",
+        )
+
+    clean_title = (req.session_title or "").strip()[:120]
+    client_req_id = (req.client_request_id or "").strip()[:80]
+
+    with get_db(commit=True) as conn:
+        if client_req_id:
+            existing_req = conn.execute(
+                "SELECT * FROM focus_sessions WHERE user_id = ? AND client_request_id = ?",
+                (uid, client_req_id),
+            ).fetchone()
+            if existing_req:
+                _reconcile_expired_focus_sessions(conn, uid)
+                refreshed = conn.execute(
+                    "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+                    (existing_req["id"], uid),
+                ).fetchone()
+                return {
+                    "session": _format_focus_session(refreshed or existing_req),
+                    "server_time": utc_now(),
+                }
+
+        _reconcile_expired_focus_sessions(conn, uid)
+
+        active_existing = conn.execute(
+            "SELECT * FROM focus_sessions WHERE user_id = ? AND status = 'active' LIMIT 1",
+            (uid,),
+        ).fetchone()
+        if active_existing:
+            raise HTTPException(
+                status_code=409,
+                detail="An active focus session is already in progress. Complete or end it before starting a new one.",
+            )
+
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+        ends_iso = (now_dt + timedelta(seconds=req.duration_seconds)).isoformat()
+        session_id = new_id("focus")
+
+        conn.execute(
+            """
+            INSERT INTO focus_sessions (
+                id, user_id, session_title, duration_seconds, short_break_minutes,
+                sound_enabled, animations_enabled, started_at, ends_at, completed_at,
+                status, distraction_event_count, client_request_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'active', 0, ?, ?, ?)
+            """,
+            (
+                session_id,
+                uid,
+                clean_title,
+                req.duration_seconds,
+                req.short_break_minutes,
+                1 if req.sound_enabled else 0,
+                1 if req.animations_enabled else 0,
+                now_iso,
+                ends_iso,
+                client_req_id,
+                now_iso,
+                now_iso,
+            ),
+        )
+        created = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        return {"session": _format_focus_session(created), "server_time": utc_now()}
+
+
+@app.get("/api/focus/sessions/active")
+def get_active_focus_session(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        recently_completed = _reconcile_expired_focus_sessions(conn, uid)
+        active_row = conn.execute(
+            "SELECT * FROM focus_sessions WHERE user_id = ? AND status = 'active' ORDER BY started_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+        return {
+            "session": _format_focus_session(active_row) if active_row else None,
+            "recently_completed": recently_completed,
+            "server_time": utc_now(),
+        }
+
+
+@app.get("/api/focus/sessions")
+def list_focus_sessions(
+    limit: int = Query(default=25, ge=1, le=100),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        _reconcile_expired_focus_sessions(conn, uid)
+        rows = conn.execute(
+            "SELECT * FROM focus_sessions WHERE user_id = ? ORDER BY started_at DESC LIMIT ?",
+            (uid, limit),
+        ).fetchall()
+        return {
+            "sessions": [_format_focus_session(r) for r in rows],
+            "server_time": utc_now(),
+        }
+
+
+@app.get("/api/focus/sessions/{session_id}")
+def get_focus_session_detail(
+    session_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        _reconcile_expired_focus_sessions(conn, uid)
+        row = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Focus session not found.")
+        event_rows = conn.execute(
+            "SELECT * FROM focus_events WHERE session_id = ? AND user_id = ? ORDER BY occurred_at DESC LIMIT 200",
+            (session_id, uid),
+        ).fetchall()
+        return {
+            "session": _format_focus_session(row),
+            "events": [_format_focus_event(e) for e in event_rows],
+            "server_time": utc_now(),
+        }
+
+
+@app.post("/api/focus/sessions/{session_id}/events")
+def record_focus_event(
+    session_id: str,
+    req: FocusEventCreateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    event_type = (req.event_type or "").strip()
+    if event_type not in FOCUS_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unsupported focus event type: {event_type}")
+
+    safe_meta: Dict[str, Any] = {}
+    if isinstance(req.metadata, dict):
+        for k, v in list(req.metadata.items())[:10]:
+            key = str(k)[:48]
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                safe_meta[key] = v[:200] if isinstance(v, str) else v
+    meta_json = json.dumps(safe_meta)
+    if len(meta_json) > 2048:
+        meta_json = "{}"
+
+    occurred_iso = utc_now()
+    if req.occurred_at:
+        try:
+            occurred_iso = _parse_iso_utc(req.occurred_at).isoformat()
+        except Exception:
+            occurred_iso = utc_now()
+
+    with get_db(commit=True) as conn:
+        _reconcile_expired_focus_sessions(conn, uid)
+        row = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Focus session not found.")
+        if row["status"] != "active":
+            raise HTTPException(status_code=409, detail="Focus session is no longer active.")
+
+        event_id = new_id("fevt")
+        now_iso = utc_now()
+        conn.execute(
+            """
+            INSERT INTO focus_events (id, session_id, user_id, event_type, occurred_at, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, session_id, uid, event_type, occurred_iso, meta_json),
+        )
+        inc = 1 if event_type in FOCUS_DISTRACTION_EVENTS else 0
+        conn.execute(
+            """
+            UPDATE focus_sessions
+            SET distraction_event_count = distraction_event_count + ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (inc, now_iso, session_id, uid),
+        )
+        updated = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        created_evt = conn.execute(
+            "SELECT * FROM focus_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        return {
+            "event": _format_focus_event(created_evt),
+            "session": _format_focus_session(updated),
+        }
+
+
+@app.post("/api/focus/sessions/{session_id}/complete")
+def complete_focus_session(
+    session_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        row = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Focus session not found.")
+        if row["status"] == "completed":
+            return {"session": _format_focus_session(row), "server_time": utc_now()}
+        if row["status"] == "aborted":
+            raise HTTPException(status_code=409, detail="Aborted focus session cannot be completed.")
+
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+        completed_at = now_iso
+        try:
+            ends_dt = _parse_iso_utc(row["ends_at"])
+            if ends_dt <= now_dt:
+                completed_at = row["ends_at"]
+        except Exception:
+            pass
+
+        conn.execute(
+            """
+            UPDATE focus_sessions
+            SET status = 'completed', completed_at = ?, updated_at = ?
+            WHERE id = ? AND user_id = ? AND status = 'active'
+            """,
+            (completed_at, now_iso, session_id, uid),
+        )
+        title = (row.get("session_title") or "").strip() or "Strict Focus Session"
+        duration_mins = max(1, int(round(int(row["duration_seconds"]) / 60)))
+        log_activity(
+            conn,
+            uid,
+            "focus_session_completed",
+            "focus_session",
+            session_id,
+            f"Completed Focus: {title}",
+            duration_minutes=duration_mins,
+            metadata={"distraction_event_count": int(row.get("distraction_event_count") or 0)},
+        )
+        updated = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        return {"session": _format_focus_session(updated), "server_time": utc_now()}
+
+
+@app.post("/api/focus/sessions/{session_id}/abort")
+def abort_focus_session(
+    session_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        _reconcile_expired_focus_sessions(conn, uid)
+        row = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Focus session not found.")
+        if row["status"] == "aborted":
+            return {"session": _format_focus_session(row), "server_time": utc_now()}
+        if row["status"] == "completed":
+            raise HTTPException(status_code=409, detail="Completed focus session cannot be aborted.")
+
+        now_iso = utc_now()
+        conn.execute(
+            """
+            UPDATE focus_sessions
+            SET status = 'aborted', completed_at = ?, updated_at = ?
+            WHERE id = ? AND user_id = ? AND status = 'active'
+            """,
+            (now_iso, now_iso, session_id, uid),
+        )
+        updated = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        return {"session": _format_focus_session(updated), "server_time": utc_now()}
+
+
+@app.delete("/api/focus/sessions/history")
+def clear_focus_session_history(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        _reconcile_expired_focus_sessions(conn, uid)
+        eligible_rows = conn.execute(
+            "SELECT id FROM focus_sessions WHERE user_id = ? AND status IN ('completed', 'aborted')",
+            (uid,),
+        ).fetchall()
+        eligible_ids = [r["id"] for r in eligible_rows]
+        if eligible_ids:
+            placeholders = ",".join("?" for _ in eligible_ids)
+            conn.execute(
+                f"DELETE FROM focus_events WHERE user_id = ? AND session_id IN ({placeholders})",
+                [uid, *eligible_ids],
+            )
+            conn.execute(
+                f"DELETE FROM focus_sessions WHERE user_id = ? AND id IN ({placeholders}) AND status IN ('completed', 'aborted')",
+                [uid, *eligible_ids],
+            )
+        active_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM focus_sessions WHERE user_id = ? AND status = 'active'",
+            (uid,),
+        ).fetchone()
+        active_preserved = bool(active_row and int(active_row["cnt"]) > 0)
+        return {
+            "deleted_count": len(eligible_ids),
+            "active_preserved": active_preserved,
+            "server_time": utc_now(),
+        }
+
+
+@app.delete("/api/focus/sessions/{session_id}")
+def delete_focus_session(
+    session_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        _reconcile_expired_focus_sessions(conn, uid)
+        row = conn.execute(
+            "SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Focus session not found.")
+        if row["status"] == "active":
+            raise HTTPException(
+                status_code=409,
+                detail="Active focus sessions cannot be deleted. End or complete the session first.",
+            )
+        conn.execute(
+            "DELETE FROM focus_events WHERE session_id = ? AND user_id = ?",
+            (session_id, uid),
+        )
+        conn.execute(
+            "DELETE FROM focus_sessions WHERE id = ? AND user_id = ?",
+            (session_id, uid),
+        )
+        return {
+            "deleted": True,
+            "session_id": session_id,
+            "server_time": utc_now(),
+        }
 
 
 # ============================================================================
