@@ -83,6 +83,36 @@ def dict_factory(cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
 _VERCEL_INIT_PATHS = set()
 
 
+def _trigger_mongo_sync(db_path: str, conn: Optional[sqlite3.Connection] = None) -> None:
+    if os.path.basename(db_path) != "aetherlearn.db":
+        return
+    try:
+        from backend.mongo_sync import get_mongodb_uri, sync_sqlite_to_mongo
+
+        if not get_mongodb_uri():
+            return
+        if os.environ.get("VERCEL") and conn is not None:
+            sync_sqlite_to_mongo(conn)
+            return
+
+        def _bg():
+            try:
+                bg_conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
+                bg_conn.row_factory = dict_factory
+                try:
+                    sync_sqlite_to_mongo(bg_conn)
+                finally:
+                    bg_conn.close()
+            except Exception:
+                pass
+
+        import threading
+
+        threading.Thread(target=_bg, daemon=True, name="brainova_mongo_sync").start()
+    except Exception:
+        pass
+
+
 @contextmanager
 def get_db(commit: bool = False):
     db_path = get_db_path()
@@ -99,10 +129,21 @@ def get_db(commit: bool = False):
         conn.executescript(SCHEMA_SQL)
         run_migrations(conn)
         conn.commit()
+        if os.path.basename(db_path) == "aetherlearn.db":
+            try:
+                from backend.mongo_sync import get_mongodb_uri, restore_sqlite_from_mongo
+
+                if get_mongodb_uri():
+                    user_cnt = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+                    if not user_cnt or int(user_cnt["cnt"]) == 0:
+                        restore_sqlite_from_mongo(conn)
+            except Exception:
+                pass
     try:
         yield conn
         if commit:
             conn.commit()
+            _trigger_mongo_sync(db_path, conn)
     except Exception:
         if commit:
             conn.rollback()
@@ -758,9 +799,20 @@ def run_migrations(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
+    db_path = get_db_path()
     with get_db(commit=True) as conn:
         conn.executescript(SCHEMA_SQL)
         run_migrations(conn)
+        if os.path.basename(db_path) == "aetherlearn.db":
+            try:
+                from backend.mongo_sync import get_mongodb_uri, restore_sqlite_from_mongo
+
+                if get_mongodb_uri():
+                    user_cnt = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+                    if not user_cnt or int(user_cnt["cnt"]) == 0:
+                        restore_sqlite_from_mongo(conn)
+            except Exception:
+                pass
 
 
 def log_activity(
