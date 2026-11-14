@@ -15,8 +15,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def resolve_data_dir() -> str:
-    """Resolve the persistent data root from BRAINOVA_DATA_DIR, defaulting to <BASE_DIR>/data."""
+    """Resolve the persistent data root from BRAINOVA_DATA_DIR, defaulting to <BASE_DIR>/data (or /tmp on Vercel)."""
     custom = (os.environ.get("BRAINOVA_DATA_DIR") or "").strip()
+    if os.environ.get("VERCEL"):
+        if custom and custom.startswith("/tmp"):
+            return os.path.abspath(custom)
+        return "/tmp/brainova_data"
     if custom:
         if os.path.isabs(custom):
             return os.path.abspath(custom)
@@ -42,6 +46,10 @@ ensure_data_directories()
 
 def get_db_path() -> str:
     custom = (os.environ.get("AETHER_DB_PATH") or "").strip()
+    if os.environ.get("VERCEL"):
+        if custom and custom.startswith("/tmp"):
+            return os.path.abspath(custom)
+        return os.path.join(DATA_DIR, "aetherlearn.db")
     if custom:
         if os.path.isabs(custom):
             return os.path.abspath(custom)

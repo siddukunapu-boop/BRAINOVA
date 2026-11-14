@@ -4,11 +4,15 @@
 
 export const TOKEN_KEY = 'aetherlearn_auth_token';
 
-export const API_BASE_URL: string = (
+const _rawApiBase: string = (
   (import.meta as any).env?.VITE_API_BASE_URL || ''
 )
   .trim()
   .replace(/\/+$/, '');
+
+export const API_BASE_URL: string = _rawApiBase.includes('onrender.com')
+  ? ''
+  : _rawApiBase;
 
 export function resolveApiUrl(path: string): string {
   if (!path || /^https?:\/\//i.test(path)) {
