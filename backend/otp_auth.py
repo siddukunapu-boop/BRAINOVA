@@ -37,6 +37,17 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 def _load_otp_secret() -> bytes:
     configured = os.environ.get("BRAINOVA_OTP_SECRET", "").strip()
+    if os.environ.get("VERCEL"):
+        if configured and len(configured) >= 32:
+            return configured.encode("utf-8")
+        seed = (
+            configured
+            or os.environ.get("AETHER_JWT_SECRET", "").strip()
+            or os.environ.get("VERCEL_PROJECT_ID")
+            or "brainova"
+        )
+        return hashlib.sha256(f"brainova-vercel-otp:{seed}".encode("utf-8")).hexdigest().encode("utf-8")
+
     if configured:
         if len(configured) < 32:
             raise RuntimeError("BRAINOVA_OTP_SECRET must contain at least 32 characters.")

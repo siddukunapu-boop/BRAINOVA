@@ -70,6 +70,9 @@ def dict_factory(cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
     return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
 
+_VERCEL_INIT_PATHS = set()
+
+
 @contextmanager
 def get_db(commit: bool = False):
     db_path = get_db_path()
@@ -81,6 +84,11 @@ def get_db(commit: bool = False):
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
+    if os.environ.get("VERCEL") and db_path not in _VERCEL_INIT_PATHS:
+        _VERCEL_INIT_PATHS.add(db_path)
+        conn.executescript(SCHEMA_SQL)
+        run_migrations(conn)
+        conn.commit()
     try:
         yield conn
         if commit:

@@ -22,12 +22,18 @@ from backend.crypto import (
     is_encrypted_credential,
     mask_credential,
 )
-from backend.database import get_db, new_id, utc_now
+from backend.database import DATA_DIR, get_db, new_id, utc_now
 
 
 def _load_jwt_secret() -> str:
     """Use an explicitly configured signing key, or create a private local one for development."""
     configured = os.environ.get("AETHER_JWT_SECRET", "").strip()
+    if os.environ.get("VERCEL"):
+        if configured and len(configured) >= 32:
+            return configured
+        seed = configured or os.environ.get("VERCEL_PROJECT_ID") or os.environ.get("VERCEL_URL") or "brainova"
+        return hashlib.sha256(f"brainova-vercel-jwt:{seed}".encode("utf-8")).hexdigest()
+
     if configured:
         if len(configured) < 32:
             raise RuntimeError("AETHER_JWT_SECRET must contain at least 32 characters.")
@@ -36,9 +42,8 @@ def _load_jwt_secret() -> str:
     if os.environ.get("AETHER_ENV", "development").strip().lower() == "production":
         raise RuntimeError("AETHER_JWT_SECRET must be configured when AETHER_ENV=production.")
 
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-    os.makedirs(data_dir, exist_ok=True)
-    secret_path = os.path.join(data_dir, ".aether_jwt_secret")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    secret_path = os.path.join(DATA_DIR, ".aether_jwt_secret")
     try:
         secret_bytes = secrets.token_urlsafe(48).encode("utf-8")
         descriptor = os.open(secret_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

@@ -379,6 +379,18 @@ def load_master_keyring(allow_create_in_dev: bool = True) -> Tuple[str, Dict[str
         or os.environ.get("AETHER_MASTER_KEY", "").strip()
     )
     old_keys = os.environ.get("BRAINOVA_OLD_MASTER_KEYS", "").strip()
+    if os.environ.get("VERCEL"):
+        if configured:
+            try:
+                combined_spec = f"{configured},{old_keys}" if old_keys else configured
+                return parse_keyring_string(combined_spec, jwt_secret_to_forbid=jwt_secret)
+            except Exception:
+                pass
+        seed = configured or os.environ.get("VERCEL_PROJECT_ID") or "brainova"
+        raw_32 = hashlib.sha256(f"brainova-vercel-master:{seed}".encode("utf-8")).digest()
+        b64_key = base64.urlsafe_b64encode(raw_32).decode("ascii")
+        return DEFAULT_KEY_VERSION, {DEFAULT_KEY_VERSION: raw_32}
+
     if configured:
         combined_spec = f"{configured},{old_keys}" if old_keys else configured
         return parse_keyring_string(combined_spec, jwt_secret_to_forbid=jwt_secret)

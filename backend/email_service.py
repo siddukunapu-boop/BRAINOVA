@@ -153,8 +153,27 @@ _CONSUMER_EMAIL_DOMAINS = {
 }
 
 
+def _resolve_email_provider_mode() -> str:
+    explicit = os.environ.get("EMAIL_PROVIDER", "").strip().lower()
+    has_resend = bool(os.environ.get("EMAIL_API_KEY", "").strip())
+    has_smtp = bool(os.environ.get("SMTP_HOST", "").strip())
+    if explicit == "resend":
+        if not has_resend and has_smtp:
+            return "smtp"
+        return "resend"
+    if explicit in {"smtp", "gmail"}:
+        if not has_smtp and has_resend:
+            return "resend"
+        return explicit
+    if not explicit:
+        if has_resend and not has_smtp:
+            return "resend"
+        return "smtp"
+    return explicit
+
+
 def _resolve_api_from_email(provider_mode: str = "") -> str:
-    mode = (provider_mode or os.environ.get("EMAIL_PROVIDER", "smtp")).strip().lower()
+    mode = (provider_mode or _resolve_email_provider_mode()).strip().lower()
     explicit = (
         os.environ.get("RESEND_FROM_EMAIL", "").strip()
         or os.environ.get("SMTP_FROM_EMAIL", "").strip()
@@ -180,7 +199,7 @@ def validate_smtp_configuration() -> tuple[bool, str]:
     if _TEST_EMAIL_SENDER is not None:
         return True, ""
 
-    provider_mode = os.environ.get("EMAIL_PROVIDER", "smtp").strip().lower() or "smtp"
+    provider_mode = _resolve_email_provider_mode()
 
     if provider_mode == "resend":
         api_key = os.environ.get("EMAIL_API_KEY", "").strip()
@@ -924,7 +943,7 @@ class WebhookEmailTransport:
 
 
 def get_email_transport() -> EmailTransport:
-    provider_mode = os.environ.get("EMAIL_PROVIDER", "smtp").strip().lower() or "smtp"
+    provider_mode = _resolve_email_provider_mode()
     if provider_mode == "resend":
         return ResendEmailTransport()
     if provider_mode == "webhook":
