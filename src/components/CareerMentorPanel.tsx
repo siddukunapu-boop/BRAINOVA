@@ -19,7 +19,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { apiRequest, getStoredToken } from '../services/api';
+import { apiRequest, getStoredToken, resolveApiUrl } from '../services/api';
 import { BrainovaLogo } from './BrainovaLogo';
 import { MentorMarkdownRenderer } from './MentorMarkdownRenderer';
 
@@ -57,7 +57,7 @@ const MentorImageCard: React.FC<{
     const load = async () => {
       try {
         const token = getStoredToken();
-        const resp = await fetch(image.url, {
+        const resp = await fetch(resolveApiUrl(image.url), {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!resp.ok) {
@@ -393,7 +393,7 @@ export const CareerMentorPanel: React.FC = () => {
 
     try {
       const token = getStoredToken();
-      const resp = await fetch(`/api/mentor/conversations/${convId}/stream`, {
+      const resp = await fetch(resolveApiUrl(`/api/mentor/conversations/${convId}/stream`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

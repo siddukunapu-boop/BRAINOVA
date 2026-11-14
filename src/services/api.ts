@@ -4,6 +4,22 @@
 
 export const TOKEN_KEY = 'aetherlearn_auth_token';
 
+export const API_BASE_URL: string = (
+  (import.meta as any).env?.VITE_API_BASE_URL || ''
+)
+  .trim()
+  .replace(/\/+$/, '');
+
+export function resolveApiUrl(path: string): string {
+  if (!path || /^https?:\/\//i.test(path)) {
+    return path;
+  }
+  if (API_BASE_URL && path.startsWith('/')) {
+    return `${API_BASE_URL}${path}`;
+  }
+  return path;
+}
+
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -70,7 +86,7 @@ export async function apiRequest<T = any>(
 
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(resolveApiUrl(path), {
       ...options,
       headers,
     });

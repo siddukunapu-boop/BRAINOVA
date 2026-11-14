@@ -126,9 +126,9 @@ DEFAULT_CORS_ORIGINS = (
 
 def get_cors_origins() -> List[str]:
     return [
-        origin.strip()
+        origin.strip().rstrip("/")
         for origin in os.environ.get("AETHER_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
-        if origin.strip()
+        if origin.strip().rstrip("/")
     ]
 
 

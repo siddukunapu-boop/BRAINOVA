@@ -151,11 +151,11 @@ class TestRenderStorageAndHealth(unittest.TestCase):
 
         with patch.dict(
             os.environ,
-            {"AETHER_CORS_ORIGINS": "https://brainova.onrender.com, https://app.brainova.ai"},
+            {"AETHER_CORS_ORIGINS": "https://brainova-os.vercel.app/, https://app.brainova.ai"},
             clear=False,
         ):
             custom = main_mod.get_cors_origins()
-            self.assertEqual(custom, ["https://brainova.onrender.com", "https://app.brainova.ai"])
+            self.assertEqual(custom, ["https://brainova-os.vercel.app", "https://app.brainova.ai"])
 
     def test_shutdown_lifecycle_is_safe_and_non_blocking(self):
         import backend.main as main_mod
