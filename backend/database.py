@@ -36,9 +36,19 @@ MENTOR_IMAGES_DIR = os.path.join(DATA_DIR, "mentor_images")
 
 
 def ensure_data_directories() -> None:
-    """Ensure all persistent data and media directories exist."""
-    for directory in (DATA_DIR, UPLOADS_DIR, AUDIO_DIR, VIDEOS_DIR, MENTOR_IMAGES_DIR):
-        os.makedirs(directory, exist_ok=True)
+    """Ensure all persistent data and media directories exist, falling back to /tmp on read-only filesystems."""
+    global DATA_DIR, UPLOADS_DIR, AUDIO_DIR, VIDEOS_DIR, MENTOR_IMAGES_DIR
+    try:
+        for directory in (DATA_DIR, UPLOADS_DIR, AUDIO_DIR, VIDEOS_DIR, MENTOR_IMAGES_DIR):
+            os.makedirs(directory, exist_ok=True)
+    except OSError:
+        DATA_DIR = "/tmp/brainova_data"
+        UPLOADS_DIR = os.path.join(DATA_DIR, "uploads")
+        AUDIO_DIR = os.path.join(DATA_DIR, "audio")
+        VIDEOS_DIR = os.path.join(DATA_DIR, "videos")
+        MENTOR_IMAGES_DIR = os.path.join(DATA_DIR, "mentor_images")
+        for directory in (DATA_DIR, UPLOADS_DIR, AUDIO_DIR, VIDEOS_DIR, MENTOR_IMAGES_DIR):
+            os.makedirs(directory, exist_ok=True)
 
 
 ensure_data_directories()
