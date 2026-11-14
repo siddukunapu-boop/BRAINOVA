@@ -13,7 +13,7 @@ both when calling cloud LLMs and when using the deterministic local knowledge sy
 """
 
 import unicodedata
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 SUPPORTED_LANGUAGES = ["English", "Telugu", "Hindi", "Kannada", "Tamil", "Marathi"]
 
