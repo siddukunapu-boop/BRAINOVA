@@ -141,11 +141,35 @@ def _get_timeout_seconds() -> float:
         return 8.0
 
 
-def _resolve_api_from_email() -> str:
-    explicit = os.environ.get("SMTP_FROM_EMAIL", "").strip()
+_CONSUMER_EMAIL_DOMAINS = {
+    "gmail.com",
+    "googlemail.com",
+    "yahoo.com",
+    "outlook.com",
+    "hotmail.com",
+    "icloud.com",
+    "aol.com",
+    "live.com",
+}
+
+
+def _resolve_api_from_email(provider_mode: str = "") -> str:
+    mode = (provider_mode or os.environ.get("EMAIL_PROVIDER", "smtp")).strip().lower()
+    explicit = (
+        os.environ.get("RESEND_FROM_EMAIL", "").strip()
+        or os.environ.get("SMTP_FROM_EMAIL", "").strip()
+    )
+    sender_domain = os.environ.get("EMAIL_SENDER_DOMAIN", "").strip().lstrip("@").lower()
+    if mode == "resend":
+        if sender_domain and sender_domain not in _CONSUMER_EMAIL_DOMAINS:
+            if explicit and extract_email_domain(explicit) == sender_domain:
+                return explicit
+            return f"noreply@{sender_domain}"
+        if explicit and extract_email_domain(explicit) not in _CONSUMER_EMAIL_DOMAINS:
+            return explicit
+        return "onboarding@resend.dev"
     if explicit:
         return explicit
-    sender_domain = os.environ.get("EMAIL_SENDER_DOMAIN", "").strip().lstrip("@")
     if sender_domain:
         return f"noreply@{sender_domain}"
     return ""
@@ -160,11 +184,11 @@ def validate_smtp_configuration() -> tuple[bool, str]:
 
     if provider_mode == "resend":
         api_key = os.environ.get("EMAIL_API_KEY", "").strip()
-        from_email = _resolve_api_from_email()
+        from_email = _resolve_api_from_email("resend")
         if not api_key or not from_email:
             return (
                 False,
-                "Email verification service (Resend) is not configured. Set EMAIL_API_KEY and SMTP_FROM_EMAIL (or EMAIL_SENDER_DOMAIN).",
+                "Email verification service (Resend) is not configured. Set EMAIL_API_KEY in environment variables.",
             )
         return True, ""
 
@@ -709,7 +733,7 @@ class ResendEmailTransport:
 
     def __init__(self) -> None:
         self.api_key = os.environ.get("EMAIL_API_KEY", "").strip()
-        self.from_email = _resolve_api_from_email()
+        self.from_email = _resolve_api_from_email("resend")
         self.from_name = os.environ.get("SMTP_FROM_NAME", "BRAINOVA").strip() or "BRAINOVA"
         self.timeout = _get_timeout_seconds()
 
@@ -750,6 +774,7 @@ class ResendEmailTransport:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": "resend-python/2.1.0",
             "Idempotency-Key": correlation_id,
         }
         req = urllib.request.Request(RESEND_API_URL, data=payload, headers=headers, method="POST")
