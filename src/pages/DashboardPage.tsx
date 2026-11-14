@@ -6,8 +6,6 @@ import {
   PlayCircle,
   ArrowRight,
   Clock,
-  Award,
-  TrendingUp,
   RotateCcw,
   BookOpen,
   FileText,
@@ -15,6 +13,7 @@ import {
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp } from '../context/AppContext';
+import { DashboardStatCards } from '../components/DashboardStatCards';
 
 export const DashboardPage: React.FC = () => {
   const { user, addToast } = useApp();
@@ -43,8 +42,11 @@ export const DashboardPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="card" style={{ padding: '40px', textAlign: 'center' }}>
-        <p style={{ color: 'var(--text-secondary)' }}>Loading your personalized dashboard...</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        <DashboardStatCards loading />
+        <div className="card" style={{ padding: '40px', textAlign: 'center' }}>
+          <p style={{ color: 'var(--text-secondary)' }}>Loading your personalized dashboard...</p>
+        </div>
       </div>
     );
   }
@@ -148,73 +150,7 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* KPI Metrics Row */}
-      <div className="grid-4">
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem', fontWeight: 600 }}>
-              OVERALL PROGRESS
-            </span>
-            <TrendingUp size={18} color="var(--accent-blue)" />
-          </div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-            {metrics.overall_progress_percent || 0}%
-          </div>
-          <div className="progress-track" style={{ margin: '10px 0 6px' }}>
-            <div
-              className="progress-fill"
-              style={{ width: `${metrics.overall_progress_percent || 0}%` }}
-            />
-          </div>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-            {metrics.completed_topics || 0} of {metrics.total_topics || 0} topics completed
-          </div>
-        </div>
-
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem', fontWeight: 600 }}>
-              ACTIVE ROADMAPS
-            </span>
-            <Compass size={18} color="var(--accent-indigo)" />
-          </div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-            {metrics.active_roadmaps || 0}
-          </div>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '12px' }}>
-            Structured career & subject plans
-          </div>
-        </div>
-
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem', fontWeight: 600 }}>
-              QUIZ MASTERY AVG
-            </span>
-            <Award size={18} color="var(--status-success)" />
-          </div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-            {metrics.quiz_attempts_count > 0 ? `${metrics.average_quiz_percentage}%` : '—'}
-          </div>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '12px' }}>
-            Across {metrics.quiz_attempts_count || 0} recorded exam attempt(s)
-          </div>
-        </div>
-
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem', fontWeight: 600 }}>
-              STUDY SOURCES
-            </span>
-            <FolderOpen size={18} color="var(--accent-violet)" />
-          </div>
-          <div style={{ fontSize: '1.8rem', fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-            {metrics.total_sources || 0}
-          </div>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '12px' }}>
-            {metrics.total_sources || 0} indexed study source(s)
-          </div>
-        </div>
-      </div>
+      <DashboardStatCards metrics={metrics} />
 
       {/* Continue Learning & Weekly Activity */}
       <div className="grid-2">

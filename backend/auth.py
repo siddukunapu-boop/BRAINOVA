@@ -395,7 +395,7 @@ def sanitize_preferences_for_client(pref: Dict[str, Any]) -> Dict[str, Any]:
         "auto_generate_policy": pref.get("auto_generate_policy", "all_async"),
         "show_demo_data": bool(pref.get("show_demo_data", 0)),
         "reduced_motion": bool(pref.get("reduced_motion", 0)),
-        "theme": pref.get("theme") or "neural_night",
+        "theme": pref.get("theme") if pref.get("theme") in ("midnight_luxe", "obsidian_emerald", "midnight_sapphire", "onyx_burgundy") else "midnight_luxe",
         "preferred_language": pref.get("preferred_language") or "English",
         "credentials_status": {
             "gemini_configured": has_gemini,

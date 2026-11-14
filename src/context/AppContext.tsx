@@ -1,7 +1,11 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { apiRequest, getStoredToken, setStoredToken } from '../services/api';
 
-export type BrainovaTheme = 'neural_night' | 'dark_light' | 'quantum_violet' | 'focus_forest';
+export type BrainovaTheme =
+  | 'midnight_luxe'
+  | 'obsidian_emerald'
+  | 'midnight_sapphire'
+  | 'onyx_burgundy';
 
 export const BRAINOVA_THEMES: Array<{
   id: BrainovaTheme;
@@ -10,28 +14,28 @@ export const BRAINOVA_THEMES: Array<{
   swatches: [string, string, string];
 }> = [
   {
-    id: 'neural_night',
-    name: 'Neural Night',
-    description: 'Deep midnight-navy, electric blue & cyan-violet',
-    swatches: ['#070a14', '#161f3d', '#38bdf8'],
+    id: 'midnight_luxe',
+    name: 'Midnight Luxe',
+    description: 'Obsidian black, warm charcoal surfaces & brushed gold accent (Default)',
+    swatches: ['#080808', '#171717', '#D6B56D'],
   },
   {
-    id: 'dark_light',
-    name: 'Dark Light',
-    description: 'Pure black & charcoal with high-contrast bright accents',
-    swatches: ['#040405', '#18181e', '#22d3ee'],
+    id: 'obsidian_emerald',
+    name: 'Obsidian Emerald',
+    description: 'Deep forest obsidian, rich emerald surfaces & muted gold accent',
+    swatches: ['#080D0B', '#123C32', '#C5A46D'],
   },
   {
-    id: 'quantum_violet',
-    name: 'Quantum Violet',
-    description: 'Deep violet backgrounds with bright purple & lavender',
-    swatches: ['#0b0616', '#211340', '#c084fc'],
+    id: 'midnight_sapphire',
+    name: 'Midnight Sapphire',
+    description: 'Deep nocturnal navy, sapphire surfaces & crisp ice-blue accent',
+    swatches: ['#080F1C', '#14243A', '#78A9E8'],
   },
   {
-    id: 'focus_forest',
-    name: 'Focus Forest',
-    description: 'Deep forest-green with calm emerald & teal accents',
-    swatches: ['#04100b', '#113023', '#34d399'],
+    id: 'onyx_burgundy',
+    name: 'Onyx Burgundy',
+    description: 'Velvet onyx, deep claret surfaces & warm rose-bronze accent',
+    swatches: ['#10090C', '#321923', '#C58A78'],
   },
 ];
 
@@ -99,12 +103,23 @@ interface AppContextValue {
 
 const THEME_STORAGE_KEY = 'brainova_theme';
 
+const VALID_THEMES: BrainovaTheme[] = [
+  'midnight_luxe',
+  'obsidian_emerald',
+  'midnight_sapphire',
+  'onyx_burgundy',
+];
+
+function isValidTheme(value: unknown): value is BrainovaTheme {
+  return typeof value === 'string' && VALID_THEMES.includes(value as BrainovaTheme);
+}
+
 function getInitialTheme(): BrainovaTheme {
   const saved = localStorage.getItem(THEME_STORAGE_KEY);
-  if (saved === 'neural_night' || saved === 'dark_light' || saved === 'quantum_violet' || saved === 'focus_forest') {
+  if (isValidTheme(saved)) {
     return saved;
   }
-  return 'neural_night';
+  return 'midnight_luxe';
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -165,10 +180,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await apiRequest<{ user: UserProfile }>('/api/auth/me');
       setUser(res.user);
       if (res.user?.preferences?.theme) {
-        const userTheme = res.user.preferences.theme as BrainovaTheme;
-        if (['neural_night', 'dark_light', 'quantum_violet', 'focus_forest'].includes(userTheme)) {
-          applyDomTheme(userTheme);
-        }
+        const userTheme = res.user.preferences.theme;
+        applyDomTheme(isValidTheme(userTheme) ? userTheme : 'midnight_luxe');
       }
       if (res.user?.preferences?.reduced_motion) {
         document.body.setAttribute('data-reduced-motion', 'true');
@@ -191,10 +204,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStoredToken(token);
     setUser(userData);
     if (userData?.preferences?.theme) {
-      const userTheme = userData.preferences.theme as BrainovaTheme;
-      if (['neural_night', 'dark_light', 'quantum_violet', 'focus_forest'].includes(userTheme)) {
-        applyDomTheme(userTheme);
-      }
+      const userTheme = userData.preferences.theme;
+      applyDomTheme(isValidTheme(userTheme) ? userTheme : 'midnight_luxe');
     }
     if (userData?.preferences?.reduced_motion) {
       document.body.setAttribute('data-reduced-motion', 'true');

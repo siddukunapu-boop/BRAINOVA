@@ -1,18 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Sparkles,
   ShieldCheck,
-  Compass,
-  BookOpen,
   CheckCircle2,
   Mail,
   RotateCcw,
   ArrowLeft,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp, UserProfile } from '../context/AppContext';
 import { OtpCodeInput } from '../components/OtpCodeInput';
+import { BrainovaLogo } from '../components/BrainovaLogo';
 import { formatOtpCountdown, OTP_DIGIT_COUNT } from '../lib/otpInputHelpers';
 
 const PENDING_REG_STORAGE_KEY = 'brainova_pending_reg_token';
@@ -32,11 +32,13 @@ export const AuthPage: React.FC = () => {
   const { loginWithToken, addToast } = useApp();
   const navigate = useNavigate();
 
-  const [mode, setMode] = useState<'login' | 'signup'>('signup');
+  const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [targetRole, setTargetRole] = useState('Full Stack Developer');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -101,6 +103,14 @@ export const AuthPage: React.FC = () => {
     setError('');
 
     if (mode === 'signup') {
+      if (name.trim().length > 40) {
+        setError('Full name must be 40 characters or fewer.');
+        return;
+      }
+      if (password.length < 6 || password.length > 25) {
+        setError('Password must be between 6 and 25 characters.');
+        return;
+      }
       if (password !== confirmPassword) {
         setError('Passwords do not match.');
         return;
@@ -219,122 +229,22 @@ export const AuthPage: React.FC = () => {
     setError('');
   };
 
+  const switchMode = (nextMode: 'login' | 'signup') => {
+    setMode(nextMode);
+    setError('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+  };
+
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px',
-      }}
-    >
-      <div
-        className="grid-2"
-        style={{
-          maxWidth: 1060,
-          width: '100%',
-          alignItems: 'stretch',
-          gap: '32px',
-        }}
-      >
-        {/* Left Brand Showcase */}
-        <div
-          className="card card-elevated"
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            padding: '36px',
-          }}
-        >
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '26px' }}>
-              <div
-                className="brainova-logo-wrap"
-                style={{ width: 64, height: 64, borderRadius: '16px' }}
-              >
-                <img
-                  src="/brainova-logo.jpg"
-                  alt="BRAINOVA Logo"
-                  className="brainova-logo-img"
-                />
-              </div>
-              <div>
-                <h1 className="brainova-brand-text" style={{ fontSize: '1.7rem', margin: 0 }}>
-                  BRAINOVA
-                </h1>
-                <div className="brainova-tagline" style={{ fontSize: '0.84rem', marginTop: 2 }}>
-                  LEARN SMARTER. THINK BIG.
-                </div>
-              </div>
-            </div>
-
-            <h2 style={{ fontSize: '1.82rem', marginBottom: '16px', lineHeight: 1.25 }}>
-              Master any engineering or academic discipline with source-grounded AI workflows.
-            </h2>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '28px', fontSize: '0.96rem' }}>
-              Upload and index your study documents for source-grounded Q&A, build personalized
-              career roadmaps, customize tutorials and reading guides, and verify mastery with
-              20-question MCQ examinations.
-            </p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                <Sparkles size={20} color="var(--accent-blue)" style={{ marginTop: 3, flexShrink: 0 }} />
-                <div>
-                  <strong>Source-Grounded Q&A & Document Library</strong>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    Upload PDF, DOCX, PPTX, Markdown, and text study materials with automatic
-                    indexing, citation-backed answers, and personal learning notes.
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                <Compass size={20} color="var(--accent-indigo)" style={{ marginTop: 3, flexShrink: 0 }} />
-                <div>
-                  <strong>Expandable AI Roadmaps & Customized Resources</strong>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    Expand any topic inline on the same page to access its Tutorial, Reading Material
-                    with architecture diagrams, and 20-MCQ Exam, or personalize tutorials and
-                    readings in Customized Roadmap.
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                <BookOpen size={20} color="var(--status-success)" style={{ marginTop: 3, flexShrink: 0 }} />
-                <div>
-                  <strong>Four Premium Dark & High-Contrast Themes</strong>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    Switch seamlessly between Neural Night, Dark Light, Quantum Violet, and Focus
-                    Forest.
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div
-            style={{
-              marginTop: '32px',
-              paddingTop: '18px',
-              borderTop: '1px solid var(--border-subtle)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              fontSize: '0.8rem',
-              color: 'var(--text-muted)',
-            }}
-          >
-            <ShieldCheck size={16} color="var(--status-success)" />
-            <span>
-              Private personal workspaces for your saved study materials and progress.
-            </span>
-          </div>
+    <div className="auth-page-shell">
+      <div className="auth-center-stack">
+        <div className="auth-brand-header">
+          <BrainovaLogo size={42} variant="auth" alt="BRAINOVA Logo" />
+          <span className="auth-brand-wordmark">BRAINOVA</span>
         </div>
 
-        {/* Right Form / Verification / Success Card */}
-        <div className="card" style={{ padding: '36px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <div className="auth-card">
           {verifiedSuccess ? (
             <div className="auth-success-card" data-testid="auth-verified-success">
               <div className="auth-success-emblem" aria-hidden="true">
@@ -356,8 +266,8 @@ export const AuthPage: React.FC = () => {
                   <ShieldCheck size={13} aria-hidden="true" />
                   <span>BRAINOVA · Account Verification</span>
                 </span>
-                <h2 style={{ fontSize: '1.45rem', margin: 0 }}>Verify Your Email</h2>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', margin: 0, lineHeight: 1.5 }}>
+                <h1 className="auth-heading">Verify Your Email</h1>
+                <p className="auth-subheading" style={{ marginBottom: 0 }}>
                   We&apos;ve sent a secure verification code to your email address. Enter the
                   six-digit code to activate your BRAINOVA account.
                 </p>
@@ -369,18 +279,7 @@ export const AuthPage: React.FC = () => {
               </div>
 
               {error && (
-                <div
-                  style={{
-                    background: 'var(--status-danger-bg)',
-                    border: '1px solid rgba(239, 68, 68, 0.4)',
-                    color: '#fca5a5',
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    fontSize: '0.85rem',
-                    marginBottom: '16px',
-                  }}
-                  role="alert"
-                >
+                <div className="auth-error-banner" role="alert">
                   {error}
                 </div>
               )}
@@ -456,53 +355,38 @@ export const AuthPage: React.FC = () => {
             </div>
           ) : (
             <>
-              <div className="tabs-bar" style={{ marginBottom: '24px' }}>
+              <div className="auth-mode-tabs" role="tablist" aria-label="Authentication mode">
                 <button
                   type="button"
-                  className={`tab-btn ${mode === 'signup' ? 'active' : ''}`}
-                  style={{ flex: 1, justifyContent: 'center' }}
-                  onClick={() => {
-                    setMode('signup');
-                    setError('');
-                  }}
-                >
-                  Create Account
-                </button>
-                <button
-                  type="button"
-                  className={`tab-btn ${mode === 'login' ? 'active' : ''}`}
-                  style={{ flex: 1, justifyContent: 'center' }}
-                  onClick={() => {
-                    setMode('login');
-                    setError('');
-                  }}
+                  role="tab"
+                  aria-selected={mode === 'login'}
+                  className={`auth-mode-tab ${mode === 'login' ? 'active' : ''}`}
+                  onClick={() => switchMode('login')}
                 >
                   Sign In
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === 'signup'}
+                  className={`auth-mode-tab ${mode === 'signup' ? 'active' : ''}`}
+                  onClick={() => switchMode('signup')}
+                >
+                  Create Account
+                </button>
               </div>
 
-              <h2 style={{ fontSize: '1.4rem', marginBottom: '6px' }}>
-                {mode === 'signup' ? 'Create Your BRAINOVA Account' : 'Sign In to BRAINOVA'}
-              </h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', marginBottom: '22px' }}>
+              <h1 className="auth-heading">
+                {mode === 'signup' ? 'Create your account' : 'Welcome back'}
+              </h1>
+              <p className="auth-subheading">
                 {mode === 'signup'
-                  ? 'Start building career roadmaps and indexing your study sources.'
-                  : 'Enter your credentials to access your saved roadmaps, sources, and quiz history.'}
+                  ? 'Enter your details to get started with BRAINOVA.'
+                  : 'Sign in with your email and password to continue.'}
               </p>
 
               {error && (
-                <div
-                  style={{
-                    background: 'var(--status-danger-bg)',
-                    border: '1px solid rgba(239, 68, 68, 0.4)',
-                    color: '#fca5a5',
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    fontSize: '0.85rem',
-                    marginBottom: '16px',
-                  }}
-                  role="alert"
-                >
+                <div className="auth-error-banner" role="alert">
                   {error}
                 </div>
               )}
@@ -518,6 +402,8 @@ export const AuthPage: React.FC = () => {
                       type="text"
                       className="form-input"
                       placeholder="e.g., Aarav Sharma"
+                      autoComplete="name"
+                      maxLength={40}
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       required
@@ -533,7 +419,8 @@ export const AuthPage: React.FC = () => {
                     id="auth-email"
                     type="email"
                     className="form-input"
-                    placeholder="student@university.edu"
+                    placeholder="name@example.com"
+                    autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
@@ -542,18 +429,31 @@ export const AuthPage: React.FC = () => {
 
                 <div className="form-group">
                   <label className="form-label" htmlFor="auth-password">
-                    Password (min 6 characters)
+                    Password
                   </label>
-                  <input
-                    id="auth-password"
-                    type="password"
-                    className="form-input"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    minLength={6}
-                    required
-                  />
+                  <div className="auth-input-wrap">
+                    <input
+                      id="auth-password"
+                      type={showPassword ? 'text' : 'password'}
+                      className="form-input"
+                      placeholder="••••••••"
+                      autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                      maxLength={mode === 'signup' ? 25 : undefined}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      minLength={6}
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="auth-password-toggle"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
+                    </button>
+                  </div>
                 </div>
 
                 {mode === 'signup' && (
@@ -561,16 +461,29 @@ export const AuthPage: React.FC = () => {
                     <label className="form-label" htmlFor="auth-confirm-password">
                       Confirm Password
                     </label>
-                    <input
-                      id="auth-confirm-password"
-                      type="password"
-                      className="form-input"
-                      placeholder="••••••••"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      minLength={6}
-                      required
-                    />
+                    <div className="auth-input-wrap">
+                      <input
+                        id="auth-confirm-password"
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        className="form-input"
+                        placeholder="••••••••"
+                        autoComplete="new-password"
+                        maxLength={25}
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        minLength={6}
+                        required
+                      />
+                      <button
+                        type="button"
+                        className="auth-password-toggle"
+                        onClick={() => setShowConfirmPassword((v) => !v)}
+                        aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                        aria-pressed={showConfirmPassword}
+                      >
+                        {showConfirmPassword ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -598,22 +511,47 @@ export const AuthPage: React.FC = () => {
 
                 <button
                   type="submit"
-                  className="btn btn-primary btn-lg"
-                  style={{ width: '100%', marginTop: '8px' }}
+                  className="btn btn-primary btn-lg auth-submit-btn"
                   disabled={submitting}
                 >
-                  <CheckCircle2 size={18} />
+                  <CheckCircle2 size={18} aria-hidden="true" />
                   <span>
                     {submitting
                       ? mode === 'signup'
                         ? 'Sending Verification Code...'
-                        : 'Authenticating...'
+                        : 'Signing In...'
                       : mode === 'signup'
                       ? 'Continue & Verify Email'
-                      : 'Sign In to BRAINOVA'}
+                      : 'Sign In'}
                   </span>
                 </button>
               </form>
+
+              <div className="auth-footer-switch">
+                {mode === 'login' ? (
+                  <>
+                    <span>Don&apos;t have an account?</span>
+                    <button
+                      type="button"
+                      className="auth-footer-link"
+                      onClick={() => switchMode('signup')}
+                    >
+                      Create Account
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span>Already have an account?</span>
+                    <button
+                      type="button"
+                      className="auth-footer-link"
+                      onClick={() => switchMode('login')}
+                    >
+                      Sign In
+                    </button>
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>

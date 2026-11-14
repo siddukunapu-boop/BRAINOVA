@@ -1,0 +1,973 @@
+/* ==========================================================================
+   BRAINOVA — TECH PULSE | CINEMATIC PURE-BLACK INTELLIGENCE UI
+   Strict #000000 canvas, #0A0A0A cards, #111111 elevated surfaces.
+   Scoped exclusively to Tech Pulse without affecting other BRAINOVA pages.
+   ========================================================================== */
+
+.app-content-container:has(.tp-root) {
+  background: var(--bg-midnight) !important;
+  padding: 0 !important;
+}
+
+.tp-root {
+  background-color: var(--bg-midnight);
+  color: var(--text-primary);
+  min-height: 100%;
+  width: 100%;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  animation: tpFadeIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.tp-root::-webkit-scrollbar,
+.tp-category-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.tp-shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  box-sizing: border-box;
+}
+
+/* --------------------------------------------------------------------------
+   1. PREMIUM EDITORIAL HEADER
+   -------------------------------------------------------------------------- */
+.tp-header {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  padding: 1.6rem 1.75rem;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+
+.tp-header::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent-indigo);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.tp-header-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.25rem;
+}
+
+.tp-brand-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.tp-icon-badge {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-indigo);
+  flex-shrink: 0;
+}
+
+.tp-eyebrow-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.25rem;
+}
+
+.tp-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-indigo);
+}
+
+.tp-live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.14rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+}
+
+.tp-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-indigo);
+  animation: tpPulseDot 2.4s ease-in-out infinite;
+}
+
+.tp-brand-block h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  color: var(--text-primary);
+  line-height: 1.15;
+}
+
+.tp-subtitle {
+  margin: 0.35rem 0 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 60ch;
+}
+
+.tp-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.05rem;
+  border-radius: 11px;
+  border: 1px solid #2d3b55;
+  background: #111111;
+  color: #ffffff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+  flex-shrink: 0;
+}
+
+.tp-refresh-btn:hover:not(:disabled) {
+  background: #161d2b;
+  border-color: #3b82f6;
+}
+
+.tp-refresh-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.tp-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tp-header-divider {
+  height: 1px;
+  background: #1c1c1c;
+  margin: 1.15rem 0 1rem;
+}
+
+.tp-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tp-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.38rem 0.78rem;
+  border-radius: 999px;
+  background: #111111;
+  border: 1px solid #252525;
+  font-size: 0.78rem;
+  color: #b3b3b3;
+}
+
+.tp-meta-chip strong {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.tp-spin {
+  animation: tpSpin 0.9s linear infinite;
+}
+
+/* --------------------------------------------------------------------------
+   2. SEARCH & CATEGORY CONTROLS
+   -------------------------------------------------------------------------- */
+.tp-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+}
+
+.tp-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.tp-search-box {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.95rem;
+  border-radius: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.tp-search-box:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-blue-soft);
+  color: var(--text-primary);
+}
+
+.tp-search-box input {
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.tp-search-box input::placeholder {
+  color: var(--text-muted);
+}
+
+.tp-verified-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.62rem 0.95rem;
+  border-radius: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.tp-verified-toggle:hover {
+  border-color: var(--border-default);
+  background: var(--surface-2);
+}
+
+.tp-verified-toggle input {
+  accent-color: var(--accent-indigo);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.tp-category-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-width: 100%;
+}
+
+.tp-cat-pill {
+  padding: 0.45rem 0.92rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 0.81rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+
+.tp-cat-pill:hover {
+  background: var(--surface-2);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.tp-cat-pill:active {
+  transform: scale(0.97);
+}
+
+.tp-cat-pill.active {
+  background: var(--accent-indigo-soft);
+  border-color: var(--accent-indigo);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+   3. ERROR BANNER
+   -------------------------------------------------------------------------- */
+.tp-error-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.9rem 1.1rem;
+  border-radius: 12px;
+  background: #120808;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-size: 0.88rem;
+}
+
+.tp-error-banner button {
+  margin-left: auto;
+  padding: 0.38rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid rgba(252, 165, 165, 0.38);
+  background: #1f0d0d;
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.tp-error-banner button:hover {
+  background: #2f1414;
+}
+
+/* --------------------------------------------------------------------------
+   4. SECTION HEADINGS & FEED GRID
+   -------------------------------------------------------------------------- */
+.tp-section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.tp-section-heading h2 {
+  margin: 0;
+  font-size: 1.18rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #ffffff;
+}
+
+.tp-count-pill {
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: #111111;
+  border: 1px solid #252525;
+  color: #b3b3b3;
+}
+
+.tp-lifecycle-hint {
+  font-size: 0.78rem;
+  color: #808080;
+}
+
+.tp-stories-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+/* --------------------------------------------------------------------------
+   5. EDITORIAL TECHNOLOGY NEWS CARDS
+   -------------------------------------------------------------------------- */
+.tp-story-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 1.35rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  animation: tpCardReveal 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  min-width: 0;
+}
+
+.tp-story-card:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+}
+
+.tp-story-meta-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.tp-badges-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.tp-verif-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.26rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.tp-verif-verified {
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  color: #67e8f9;
+}
+
+.tp-verif-corroborated {
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.38);
+  color: #93c5fd;
+}
+
+.tp-verif-unconfirmed {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fcd34d;
+}
+
+.tp-verif-corrected {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.42);
+  color: #fca5a5;
+}
+
+.tp-category-pill {
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  background: #141414;
+  border: 1px solid #252525;
+  color: #b3b3b3;
+}
+
+.tp-late-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.62rem;
+  border-radius: 999px;
+  font-size: 0.73rem;
+  font-weight: 500;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.38);
+  color: #c4b5fd;
+}
+
+.tp-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  padding: 0.42rem 0.82rem;
+  border-radius: 10px;
+  border: 1px solid #252525;
+  background: #111111;
+  color: #d4d4d8;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.12s ease;
+}
+
+.tp-save-btn:hover:not(:disabled) {
+  background: #18181b;
+  border-color: #3f3f46;
+  color: #ffffff;
+}
+
+.tp-save-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.tp-save-btn.is-saved {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #93c5fd;
+}
+
+.tp-save-btn.is-saved:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.tp-story-title {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.38;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: #ffffff;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.tp-attribution-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: #808080;
+}
+
+.tp-source-name {
+  font-weight: 600;
+  color: #e5e5e5;
+}
+
+.tp-dot {
+  color: #404040;
+}
+
+.tp-correction-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.72rem 0.92rem;
+  border-radius: 10px;
+  background: #140909;
+  border: 1px solid rgba(239, 68, 68, 0.38);
+  color: #fecaca;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.tp-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.8rem;
+}
+
+.tp-summary-block {
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  background: var(--bg-charcoal);
+  border: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+
+.tp-summary-student {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.tp-summary-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 0.42rem;
+}
+
+.tp-summary-student .tp-summary-label {
+  color: var(--accent-indigo);
+}
+
+.tp-summary-block p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.58;
+  color: var(--text-primary);
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+/* --------------------------------------------------------------------------
+   6. ARTICLE-GRADE EXPANDED STORY DETAIL VIEW
+   -------------------------------------------------------------------------- */
+.tp-expanded-drawer {
+  padding: 1.25rem 1.35rem;
+  border-radius: 14px;
+  background: var(--bg-charcoal);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  animation: tpDrawerReveal 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.tp-drawer-section {
+  max-width: 74ch;
+}
+
+.tp-drawer-section + .tp-drawer-section {
+  padding-top: 1rem;
+  border-top: 1px solid #171717;
+}
+
+.tp-drawer-section h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #22d3ee;
+}
+
+.tp-drawer-section p,
+.tp-drawer-section ul {
+  margin: 0;
+  font-size: 0.91rem;
+  line-height: 1.68;
+  color: #d4d4d8;
+}
+
+.tp-drawer-section ul {
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.tp-drawer-section code {
+  background: #141414;
+  border: 1px solid #262626;
+  border-radius: 5px;
+  padding: 0.1rem 0.38rem;
+  font-size: 0.84em;
+  color: #93c5fd;
+}
+
+.tp-sources-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tp-supporting-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.34rem 0.7rem;
+  border-radius: 8px;
+  background: #111111;
+  border: 1px solid #252525;
+  color: #93c5fd;
+  font-size: 0.8rem;
+  text-decoration: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.tp-supporting-link:hover {
+  border-color: #3b82f6;
+  background: #161d2b;
+}
+
+.tp-fallback-note {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #808080;
+  font-style: italic;
+}
+
+.tp-story-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid #161616;
+}
+
+.tp-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.48rem 0.88rem;
+  border-radius: 10px;
+  border: 1px solid #252525;
+  background: #111111;
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.tp-expand-btn:hover {
+  border-color: #3b82f6;
+  background: #161d2b;
+}
+
+.tp-original-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.46rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.08);
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: #93c5fd;
+  text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.tp-original-link:hover {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: #3b82f6;
+}
+
+/* --------------------------------------------------------------------------
+   7. SAVED INTELLIGENCE ARCHIVE SECTION
+   -------------------------------------------------------------------------- */
+.tp-saved-section {
+  margin-top: 0.75rem;
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: var(--bg-charcoal);
+  border: 1px solid var(--border-subtle);
+  position: relative;
+}
+
+.tp-saved-section .tp-story-card {
+  background: var(--surface-1);
+  border-color: var(--border-default);
+}
+
+.tp-saved-section .tp-story-card:hover {
+  border-color: var(--border-strong);
+}
+
+.tp-saved-empty {
+  padding: 2.25rem 1.25rem;
+  border-radius: 14px;
+  border: 1px dashed var(--border-subtle);
+  background: var(--surface-1);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+/* --------------------------------------------------------------------------
+   8. LOADING SKELETONS & EMPTY FEED STATE
+   -------------------------------------------------------------------------- */
+.tp-skeleton-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+.tp-skeleton-card {
+  height: 220px;
+  border-radius: 16px;
+  border: 1px solid #1f1f1f;
+  background: linear-gradient(90deg, #0a0a0a 25%, #141414 50%, #0a0a0a 75%);
+  background-size: 200% 100%;
+  animation: tpShimmer 1.6s ease-in-out infinite;
+}
+
+.tp-empty-state {
+  padding: 3rem 1.5rem;
+  border-radius: 16px;
+  border: 1px dashed #262626;
+  background: #0a0a0a;
+  text-align: center;
+  color: #b3b3b3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.tp-empty-emblem {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: #111111;
+  border: 1px solid #252525;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #3b82f6;
+  margin-bottom: 0.25rem;
+}
+
+.tp-empty-state h3 {
+  margin: 0;
+  font-size: 1.08rem;
+  color: #ffffff;
+}
+
+.tp-empty-state p {
+  margin: 0;
+  max-width: 50ch;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: #808080;
+}
+
+/* --------------------------------------------------------------------------
+   9. ANIMATIONS & REDUCED MOTION
+   -------------------------------------------------------------------------- */
+@keyframes tpFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes tpCardReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes tpDrawerReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes tpShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes tpPulseDot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes tpSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tp-root,
+  .tp-story-card,
+  .tp-expanded-drawer,
+  .tp-skeleton-card,
+  .tp-live-dot,
+  .tp-spin {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   10. RESPONSIVE BREAKPOINTS (1920, 1366, 768, 390, 360)
+   -------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .tp-shell {
+    padding: 1.25rem 1rem 2.75rem;
+    gap: 1.35rem;
+  }
+  .tp-header {
+    padding: 1.2rem 1.15rem;
+  }
+  .tp-story-card {
+    padding: 1.1rem 1.05rem;
+  }
+  .tp-saved-section {
+    padding: 1.1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .tp-shell {
+    padding: 1rem 0.75rem 2.5rem;
+  }
+  .tp-refresh-btn {
+    width: 100%;
+  }
+  .tp-verified-toggle {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .tp-summary-grid {
+    grid-template-columns: 1fr;
+  }
+  .tp-story-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tp-expand-btn,
+  .tp-original-link {
+    justify-content: center;
+  }
+}

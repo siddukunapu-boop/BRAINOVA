@@ -373,9 +373,18 @@
 
 .diary-turn-btn:hover:not(:disabled) {
   background: #ffffff;
-  border-color: #3b82f6;
-  color: #1d4ed8;
+  border-color: #6366f1;
+  color: #4338ca;
   transform: scale(1.06);
+}
+
+.diary-turn-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.diary-turn-btn:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.88);
+  outline-offset: 2px;
 }
 
 .diary-turn-btn:disabled {

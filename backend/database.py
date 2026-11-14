@@ -521,6 +521,148 @@ CREATE TABLE IF NOT EXISTS email_webhook_events (
     event_type TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS career_profiles (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    target_career TEXT NOT NULL DEFAULT 'Software Engineer',
+    target_job_role TEXT NOT NULL DEFAULT 'SDE-1 / Fresher',
+    target_company TEXT NOT NULL DEFAULT '',
+    graduation_year INTEGER NOT NULL DEFAULT 2026,
+    current_skill_level TEXT NOT NULL DEFAULT 'Intermediate',
+    available_hours_per_week INTEGER NOT NULL DEFAULT 14,
+    target_deadline TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS career_skill_assessments (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    target_career TEXT NOT NULL DEFAULT 'Software Engineer',
+    total_questions INTEGER NOT NULL DEFAULT 0,
+    correct_count INTEGER NOT NULL DEFAULT 0,
+    overall_score INTEGER NOT NULL DEFAULT 0,
+    category_scores_json TEXT NOT NULL DEFAULT '{}',
+    answers_json TEXT NOT NULL DEFAULT '[]',
+    project_evidence_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_career_assess_user ON career_skill_assessments(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS mentor_rate_limits (
+    user_id TEXT NOT NULL,
+    window_start_epoch INTEGER NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, window_start_epoch)
+);
+
+CREATE TABLE IF NOT EXISTS tech_pulse_sources (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    organization TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 2,
+    feed_url TEXT NOT NULL UNIQUE,
+    feed_type TEXT NOT NULL DEFAULT 'rss',
+    is_official INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_fetched_at TEXT NOT NULL DEFAULT '',
+    last_success_at TEXT NOT NULL DEFAULT '',
+    last_status TEXT NOT NULL DEFAULT '',
+    error_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS tech_pulse_ingestion_runs (
+    id TEXT PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'running',
+    trigger_type TEXT NOT NULL DEFAULT 'scheduler',
+    sources_checked INTEGER NOT NULL DEFAULT 0,
+    discovered_count INTEGER NOT NULL DEFAULT 0,
+    published_count INTEGER NOT NULL DEFAULT 0,
+    error_summary TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS tech_pulse_discovered_articles (
+    id TEXT PRIMARY KEY,
+    canonical_url TEXT NOT NULL UNIQUE,
+    raw_url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    normalized_title TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    is_official_source INTEGER NOT NULL DEFAULT 0,
+    published_at_utc TEXT NOT NULL,
+    source_timezone TEXT NOT NULL DEFAULT 'UTC',
+    discovered_at_utc TEXT NOT NULL,
+    raw_excerpt TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL,
+    story_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tp_discovered_story ON tech_pulse_discovered_articles(story_id);
+CREATE INDEX IF NOT EXISTS idx_tp_discovered_hash ON tech_pulse_discovered_articles(content_hash);
+
+CREATE TABLE IF NOT EXISTS tech_pulse_stories (
+    id TEXT PRIMARY KEY,
+    dedup_key TEXT NOT NULL UNIQUE,
+    canonical_url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    normalized_title TEXT NOT NULL,
+    category TEXT NOT NULL,
+    verification_status TEXT NOT NULL DEFAULT 'Unconfirmed report',
+    correction_note TEXT NOT NULL DEFAULT '',
+    original_source_name TEXT NOT NULL,
+    original_source_url TEXT NOT NULL,
+    supporting_sources_json TEXT NOT NULL DEFAULT '[]',
+    published_at_utc TEXT NOT NULL,
+    discovered_at_utc TEXT NOT NULL,
+    processed_at_utc TEXT NOT NULL,
+    is_late_update INTEGER NOT NULL DEFAULT 0,
+    late_update_label TEXT NOT NULL DEFAULT '',
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    evidence_excerpt TEXT NOT NULL DEFAULT '',
+    ai_provider TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tp_stories_cat ON tech_pulse_stories(category, published_at_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_tp_stories_hash ON tech_pulse_stories(content_hash);
+
+CREATE TABLE IF NOT EXISTS tech_pulse_daily_feed (
+    ist_date TEXT NOT NULL,
+    story_id TEXT NOT NULL REFERENCES tech_pulse_stories(id) ON DELETE CASCADE,
+    rank_score REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    added_at_utc TEXT NOT NULL,
+    expired_at_utc TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (ist_date, story_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tp_daily_feed_active ON tech_pulse_daily_feed(ist_date, status, rank_score DESC);
+
+CREATE TABLE IF NOT EXISTS tech_pulse_bookmarks (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    story_id TEXT NOT NULL REFERENCES tech_pulse_stories(id) ON DELETE CASCADE,
+    snapshot_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, story_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tp_bookmarks_user ON tech_pulse_bookmarks(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS tech_pulse_locks (
+    lock_name TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    acquired_at_epoch INTEGER NOT NULL,
+    expires_at_epoch INTEGER NOT NULL
+);
 """
 
 
@@ -539,7 +681,15 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "email_delivery_logs", "provider_message_id", "TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_email_delivery_msgid ON email_delivery_logs(provider_message_id)")
     # User preferences: 4-theme selector and 6-language selector
-    _ensure_column(conn, "user_preferences", "theme", "TEXT NOT NULL DEFAULT 'neural_night'")
+    _ensure_column(conn, "user_preferences", "theme", "TEXT NOT NULL DEFAULT 'midnight_luxe'")
+    conn.execute(
+        """
+        UPDATE user_preferences
+        SET theme = 'midnight_luxe'
+        WHERE theme IS NULL
+           OR theme NOT IN ('midnight_luxe', 'obsidian_emerald', 'midnight_sapphire', 'onyx_burgundy')
+        """
+    )
     _ensure_column(conn, "user_preferences", "preferred_language", "TEXT NOT NULL DEFAULT 'English'")
     # Topic readings: non-destructive CUSTOMIZED vs ORIGINAL reading storage
     _ensure_column(conn, "topic_readings", "diagrams_json", "TEXT NOT NULL DEFAULT '[]'")

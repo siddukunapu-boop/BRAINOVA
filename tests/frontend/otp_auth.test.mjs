@@ -68,4 +68,12 @@ test('AuthPage wires strict Email OTP flow endpoints, sessionStorage recovery, a
   assert.match(authPage, /brainova_pending_reg_token/);
   assert.match(authPage, /Welcome to BRAINOVA!/);
   assert.match(authPage, /Your email has been verified\. Your learning journey starts now\./);
+  assert.match(authPage, /auth-page-shell/);
+  assert.match(authPage, /Show password/);
+  assert.doesNotMatch(authPage, /Master any engineering or academic discipline/);
+  assert.match(authPage, /maxLength=\{40\}/);
+  assert.match(authPage, /maxLength=\{mode === 'signup' \? 25 : undefined\}/);
+  assert.match(authPage, /maxLength=\{25\}/);
+  assert.match(authPage, /<label className="form-label" htmlFor="auth-password">\s*Password\s*<\/label>/);
+  assert.doesNotMatch(authPage, /Password \(6–25 characters\)/);
 });

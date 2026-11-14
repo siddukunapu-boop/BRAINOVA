@@ -200,13 +200,13 @@ def initiate_pending_registration(
     client_ip: str = "",
 ) -> Dict[str, Any]:
     clean_name = (name or "").strip()
-    if len(clean_name) < 1 or len(clean_name) > 120:
-        raise HTTPException(status_code=400, detail="Please enter your full name.")
+    if len(clean_name) < 1 or len(clean_name) > 40:
+        raise HTTPException(status_code=400, detail="Full name must be between 1 and 40 characters.")
 
     email_clean = normalize_email(email)
 
-    if len(password or "") < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    if len(password or "") < 6 or len(password or "") > 25:
+        raise HTTPException(status_code=400, detail="Password must be between 6 and 25 characters.")
     if confirm_password is not None and password != confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
 

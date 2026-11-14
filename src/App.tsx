@@ -17,6 +17,8 @@ import { StudyJournalPage } from './pages/StudyJournalPage';
 import { QuizzesPage } from './pages/QuizzesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { FocusModePage } from './pages/FocusModePage';
+import { CareerLaunchpadPage } from './pages/CareerLaunchpadPage';
+import { TechPulsePage } from './pages/TechPulsePage';
 
 // Keyed by location so navigating away from a crashed page resets the boundary.
 const RouteErrorBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -73,6 +75,8 @@ const ProtectedRoutes: React.FC = () => {
           <Route path="/diary" element={<DiaryPage />} />
           <Route path="/study-journal" element={<StudyJournalPage />} />
           <Route path="/focus" element={<FocusModePage />} />
+          <Route path="/career-launchpad" element={<CareerLaunchpadPage />} />
+          <Route path="/tech-pulse" element={<TechPulsePage />} />
           <Route path="/quizzes" element={<QuizzesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/analytics" element={<Navigate to="/dashboard" replace />} />

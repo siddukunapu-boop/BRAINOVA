@@ -17,9 +17,12 @@ import {
   X,
   Check,
   ShieldCheck,
+  Rocket,
+  Newspaper,
 } from 'lucide-react';
 import { useApp, BRAINOVA_THEMES } from '../context/AppContext';
 import { FocusModalsOverlay, FocusStatusBar } from './FocusOverlayUI';
+import { BrainovaLogo } from './BrainovaLogo';
 import { apiRequest } from '../services/api';
 
 interface SearchResultItem {
@@ -91,6 +94,8 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
     { to: '/diary', label: 'Diary', icon: BookText },
     { to: '/study-journal', label: 'Study Journal', icon: GraduationCap },
     { to: '/focus', label: 'Focus Mode', icon: ShieldCheck },
+    { to: '/career-launchpad', label: 'Career Launchpad', icon: Rocket },
+    { to: '/tech-pulse', label: 'Tech Pulse', icon: Newspaper },
     { to: '/quizzes', label: 'Quizzes & Results', icon: CheckSquare },
     { to: '/settings', label: 'Settings', icon: Settings },
   ];
@@ -108,13 +113,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
             style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '11px' }}
             onClick={() => navigate('/dashboard')}
           >
-            <div className="brainova-logo-wrap" style={{ width: 38, height: 38 }}>
-              <img
-                src="/brainova-logo.jpg"
-                alt="BRAINOVA Logo"
-                className="brainova-logo-img"
-              />
-            </div>
+            <BrainovaLogo size={38} variant="sidebar" alt="BRAINOVA Logo" />
             <div style={{ minWidth: 0 }}>
               <span className="brand-title brainova-brand-text" style={{ fontSize: '1.08rem', display: 'block', lineHeight: 1.15 }}>
                 BRAINOVA
@@ -138,19 +137,25 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           </div>
         </div>
 
-        <nav className="sidebar-nav">
+        <nav className="sidebar-nav" aria-label="Main Navigation">
           <div className="nav-section-label">BRAINOVA Platform</div>
-          {navItems.map((item) => {
+          {navItems.map((item, idx) => {
             const Icon = item.icon;
+            const isSettings = item.to === '/settings';
             return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-              >
-                <Icon size={18} style={{ flexShrink: 0 }} />
-                <span>{item.label}</span>
-              </NavLink>
+              <React.Fragment key={item.to}>
+                {isSettings && <div className="nav-group-divider" role="separator" />}
+                <NavLink
+                  to={item.to}
+                  title={item.label}
+                  style={{ '--nav-index': idx } as React.CSSProperties}
+                  className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                  onClick={() => setMobileOpen(false)}
+                >
+                  <Icon size={18} strokeWidth={2} style={{ flexShrink: 0 }} />
+                  <span>{item.label}</span>
+                </NavLink>
+              </React.Fragment>
             );
           })}
         </nav>
@@ -236,13 +241,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
               className="topbar-brand"
               onClick={() => navigate('/dashboard')}
             >
-              <div className="brainova-logo-wrap" style={{ width: 34, height: 34 }}>
-                <img
-                  src="/brainova-logo.jpg"
-                  alt="BRAINOVA"
-                  className="brainova-logo-img"
-                />
-              </div>
+              <BrainovaLogo size={34} variant="topbar" alt="BRAINOVA" />
               <div className="topbar-brand-text">
                 <span className="brainova-brand-text" style={{ fontSize: '1.02rem', lineHeight: 1.15 }}>
                   BRAINOVA

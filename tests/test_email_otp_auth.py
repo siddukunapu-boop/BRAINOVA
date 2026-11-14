@@ -683,6 +683,39 @@ class EmailOtpAuthTests(unittest.TestCase):
         self.assertIn("token", login_res)
         self.assertEqual(len(self.sent_emails), 0)
 
+    def test_registration_input_length_limits_and_existing_long_password_login(self):
+        # 40-char name and 25-char password are accepted
+        name_40 = "A" * 40
+        pw_25 = "P" * 25
+        ok = self._register(email="bounds40@example.com", name=name_40, password=pw_25)
+        self.assertEqual(ok["status"], "verification_required")
+
+        # 41-char name is rejected
+        with self.assertRaises(HTTPException) as bad_name:
+            self._register(email="bounds41@example.com", name="A" * 41, password=pw_25)
+        self.assertEqual(bad_name.exception.status_code, 400)
+        self.assertIn("40", bad_name.exception.detail)
+
+        # 26-char password is rejected on registration
+        with self.assertRaises(HTTPException) as bad_pw:
+            self._register(email="bounds26@example.com", name="Valid Name", password="P" * 26)
+        self.assertEqual(bad_pw.exception.status_code, 400)
+        self.assertIn("25", bad_pw.exception.detail)
+
+        # Existing user with >25-char password can still sign in without restriction
+        long_pw = "L" * 32
+        now = utc_now()
+        with get_db(commit=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO users (id, email, name, password_hash, role, target_role, bio, avatar_color, email_verified, created_at, updated_at)
+                VALUES ('usr_longpw', 'longpw@example.com', 'Long PW User', ?, 'student', 'Analyst', '', '#6366f1', 1, ?, ?)
+                """,
+                (hash_password(long_pw), now, now),
+            )
+        login_ok = login(LoginRequest(email="longpw@example.com", password=long_pw))
+        self.assertIn("token", login_ok)
+
 
 if __name__ == "__main__":
     unittest.main()

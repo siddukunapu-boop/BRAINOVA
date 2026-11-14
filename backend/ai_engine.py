@@ -234,6 +234,21 @@ def verify_youtube_oembed(video_id: str) -> Optional[Dict[str, str]]:
 # ============================================================================
 # LIVE LLM PROVIDER CLIENT ABSTRACTION
 # ============================================================================
+_RETIRED_GEMINI_MODELS = {
+    "gemini-2.5-flash": "gemini-3.5-flash-lite",
+    "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
+}
+
+
+def _normalize_gemini_model(raw_model: Optional[str]) -> str:
+    cleaned = (raw_model or "").strip()
+    if cleaned.startswith("models/"):
+        cleaned = cleaned[7:]
+    if not cleaned:
+        return "gemini-3.5-flash-lite"
+    return _RETIRED_GEMINI_MODELS.get(cleaned, cleaned)
+
+
 def _resolve_active_provider(user_prefs: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
     """
     Returns (provider_name, api_key, model_name).
@@ -243,7 +258,7 @@ def _resolve_active_provider(user_prefs: Optional[Dict[str, Any]] = None) -> Tup
     preferred = prefs.get("ai_provider", "auto")
 
     gemini_key = (prefs.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
-    gemini_model = (prefs.get("gemini_model") or os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+    gemini_model = _normalize_gemini_model(prefs.get("gemini_model") or os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash-lite")
 
     openai_key = (prefs.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or "").strip()
     openai_model = (prefs.get("openai_model") or os.environ.get("OPENAI_MODEL") or "gpt-4o-mini").strip()

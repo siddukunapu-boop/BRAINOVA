@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -58,9 +58,22 @@ from backend.auth import (
     verify_password,
 )
 from backend.crypto import redact_sensitive_text
+from backend.career_launchpad import (
+    CAREER_BENCHMARKS,
+    SKILL_CATEGORIES,
+    build_weekly_performance,
+    check_and_increment_mentor_rate_limit,
+    compute_skill_gap_and_readiness,
+    extract_conversation_title,
+    generate_mentor_image,
+    get_public_assessment_questions,
+    grade_skill_assessment,
+    stream_mentor_reply,
+)
 from backend.database import (
     AUDIO_DIR,
     BASE_DIR,
+    DATA_DIR,
     UPLOADS_DIR,
     VIDEOS_DIR,
     get_db,
@@ -79,6 +92,18 @@ from backend.job_worker import (
     enqueue_topic_resource_jobs,
     execute_job_sync,
     resume_incomplete_jobs_on_startup,
+)
+from backend.tech_pulse import (
+    TECH_PULSE_CATEGORIES,
+    get_daily_feed,
+    get_story_detail,
+    list_saved_stories,
+    remove_story_bookmark,
+    run_ingestion_cycle,
+    save_story_bookmark,
+    seed_official_sources,
+    start_tech_pulse_scheduler,
+    to_ist_date_str,
 )
 from backend.multilang_engine import SUPPORTED_LANGUAGES, normalize_language, validate_supported_language
 from backend.tts_engine import synthesize_podcast_audio
@@ -112,7 +137,10 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    with get_db(commit=True) as conn:
+        seed_official_sources(conn)
     resume_incomplete_jobs_on_startup()
+    start_tech_pulse_scheduler(interval_seconds=1200)
 
 
 @app.exception_handler(Exception)
@@ -578,6 +606,8 @@ def update_preferences(
         ):
             val = getattr(req, field)
             if val is not None:
+                if field == "theme" and val not in ("midnight_luxe", "obsidian_emerald", "midnight_sapphire", "onyx_burgundy"):
+                    raise HTTPException(status_code=400, detail="Invalid theme selection.")
                 updates[field] = val
 
         raw_credentials: Dict[str, str] = {}
@@ -4063,6 +4093,747 @@ def delete_focus_session(
             "session_id": session_id,
             "server_time": utc_now(),
         }
+
+
+# ============================================================================
+# CAREER LAUNCHPAD & GENERAL-PURPOSE AI MENTOR
+# ============================================================================
+class CareerProfileUpdateRequest(BaseModel):
+    target_career: str = Field(..., min_length=2, max_length=80)
+    target_job_role: str = Field("", max_length=120)
+    target_company: str = Field("", max_length=120)
+    graduation_year: int = Field(2026, ge=2020, le=2035)
+    current_skill_level: str = Field("Intermediate", max_length=40)
+    available_hours_per_week: int = Field(14, ge=1, le=168)
+    target_deadline: str = Field("", max_length=40)
+
+
+class ProjectEvidencePayload(BaseModel):
+    deployed_projects: int = Field(0, ge=0, le=20)
+    has_github_portfolio: bool = False
+    has_automated_tests: bool = False
+
+
+class CareerAssessmentSubmitRequest(BaseModel):
+    answers: Dict[str, int] = Field(default_factory=dict)
+    project_evidence: Optional[ProjectEvidencePayload] = None
+
+
+class CareerPlanGenerateRequest(BaseModel):
+    focus_note: str = Field("", max_length=400)
+
+
+class MentorConversationCreateRequest(BaseModel):
+    title: str = Field("New Mentor Conversation", max_length=120)
+
+
+class MentorConversationRenameRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+
+
+class MentorStreamRequest(BaseModel):
+    message: str = Field("", max_length=8000)
+    regenerate: bool = False
+
+
+class MentorFeedbackRequest(BaseModel):
+    message_id: str = Field(..., min_length=1, max_length=80)
+    feedback: str = Field(..., pattern="^(up|down|none)$")
+
+
+def _get_or_create_career_profile(conn: Any, uid: str) -> Dict[str, Any]:
+    row = conn.execute("SELECT * FROM career_profiles WHERE user_id = ?", (uid,)).fetchone()
+    if row:
+        return dict(row)
+    user_row = conn.execute("SELECT target_role FROM users WHERE id = ?", (uid,)).fetchone()
+    default_career = (user_row["target_role"] if user_row else "") or "Software Engineer"
+    if default_career not in CAREER_BENCHMARKS:
+        default_career = "Software Engineer"
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT INTO career_profiles (
+            user_id, target_career, target_job_role, target_company,
+            graduation_year, current_skill_level, available_hours_per_week, target_deadline, updated_at
+        ) VALUES (?, ?, ?, '', 2026, 'Intermediate', 14, '', ?)
+        """,
+        (uid, default_career, f"Fresher {default_career}", now),
+    )
+    return dict(conn.execute("SELECT * FROM career_profiles WHERE user_id = ?", (uid,)).fetchone())
+
+
+@app.get("/api/career-launchpad/overview")
+def get_career_launchpad_overview(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        profile = _get_or_create_career_profile(conn, uid)
+        latest_assess = conn.execute(
+            "SELECT * FROM career_skill_assessments WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+        latest_dict = dict(latest_assess) if latest_assess else None
+
+        topic_row = conn.execute(
+            """
+            SELECT COUNT(*) AS total_topics,
+                   SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_topics
+            FROM roadmap_topics WHERE user_id = ?
+            """,
+            (uid,),
+        ).fetchone()
+        total_topics = int(topic_row["total_topics"] or 0) if topic_row else 0
+        completed_topics = int(topic_row["completed_topics"] or 0) if topic_row else 0
+        overall_progress = round((completed_topics / total_topics) * 100) if total_topics > 0 else 0
+
+        quiz_row = conn.execute(
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(percentage), 0) AS avg_pct FROM quiz_attempts WHERE user_id = ?",
+            (uid,),
+        ).fetchone()
+
+        analysis = compute_skill_gap_and_readiness(
+            target_career=profile["target_career"],
+            latest_assessment=latest_dict,
+            roadmap_stats={"overall_progress_percent": overall_progress},
+            quiz_stats={
+                "attempts_count": int(quiz_row["cnt"] or 0) if quiz_row else 0,
+                "average_percentage": float(quiz_row["avg_pct"] or 0) if quiz_row else 0.0,
+            },
+        )
+        weekly = build_weekly_performance(conn, uid)
+        saved_roadmaps = conn.execute(
+            "SELECT id, title, target_role, skill_level, hours_per_week, target_completion_date, total_estimated_hours, created_at FROM roadmaps WHERE user_id = ? ORDER BY created_at DESC LIMIT 10",
+            (uid,),
+        ).fetchall()
+
+        parsed_latest = None
+        if latest_dict:
+            parsed_latest = {
+                "id": latest_dict["id"],
+                "target_career": latest_dict["target_career"],
+                "total_questions": latest_dict["total_questions"],
+                "correct_count": latest_dict["correct_count"],
+                "overall_score": latest_dict["overall_score"],
+                "category_scores": json.loads(latest_dict["category_scores_json"] or "{}"),
+                "project_evidence": json.loads(latest_dict["project_evidence_json"] or "{}"),
+                "created_at": latest_dict["created_at"],
+            }
+
+        return {
+            "profile": profile,
+            "careers": list(CAREER_BENCHMARKS.keys()),
+            "skill_categories": SKILL_CATEGORIES,
+            "latest_assessment": parsed_latest,
+            "gap_analysis": analysis,
+            "weekly_performance": weekly,
+            "saved_plans": [dict(r) for r in saved_roadmaps],
+        }
+
+
+@app.put("/api/career-launchpad/profile")
+def update_career_profile(
+    req: CareerProfileUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    now = utc_now()
+    with get_db(commit=True) as conn:
+        _get_or_create_career_profile(conn, uid)
+        conn.execute(
+            """
+            UPDATE career_profiles
+            SET target_career = ?, target_job_role = ?, target_company = ?,
+                graduation_year = ?, current_skill_level = ?, available_hours_per_week = ?,
+                target_deadline = ?, updated_at = ?
+            WHERE user_id = ?
+            """,
+            (
+                req.target_career.strip(),
+                req.target_job_role.strip(),
+                req.target_company.strip(),
+                req.graduation_year,
+                req.current_skill_level.strip(),
+                req.available_hours_per_week,
+                req.target_deadline.strip(),
+                now,
+                uid,
+            ),
+        )
+        updated = dict(conn.execute("SELECT * FROM career_profiles WHERE user_id = ?", (uid,)).fetchone())
+    return {"profile": updated}
+
+
+@app.get("/api/career-launchpad/assessment")
+def get_career_assessment(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    return {
+        "categories": SKILL_CATEGORIES,
+        "questions": get_public_assessment_questions(),
+    }
+
+
+@app.post("/api/career-launchpad/assessment/submit")
+def submit_career_assessment(
+    req: CareerAssessmentSubmitRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        profile = _get_or_create_career_profile(conn, uid)
+        evidence_dict = req.project_evidence.model_dump() if req.project_evidence else {}
+        graded = grade_skill_assessment(req.answers, evidence_dict)
+        assess_id = new_id("cass")
+        now = utc_now()
+        conn.execute(
+            """
+            INSERT INTO career_skill_assessments (
+                id, user_id, target_career, total_questions, correct_count,
+                overall_score, category_scores_json, answers_json, project_evidence_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                assess_id,
+                uid,
+                profile["target_career"],
+                graded["total_questions"],
+                graded["correct_count"],
+                graded["overall_score"],
+                json.dumps(graded["category_scores"]),
+                json.dumps(graded["graded_answers"]),
+                json.dumps(graded["project_evidence"]),
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO activity_logs (id, user_id, activity_type, entity_type, entity_id, title, duration_minutes, metadata_json, created_at)
+            VALUES (?, ?, 'career_assessment', 'career_skill_assessments', ?, ?, 15, ?, ?)
+            """,
+            (
+                new_id("act"),
+                uid,
+                assess_id,
+                f"Career Skill Assessment ({profile['target_career']})",
+                json.dumps({"overall_score": graded["overall_score"]}),
+                now,
+            ),
+        )
+    return {
+        "assessment": {
+            "id": assess_id,
+            "target_career": profile["target_career"],
+            "total_questions": graded["total_questions"],
+            "correct_count": graded["correct_count"],
+            "overall_score": graded["overall_score"],
+            "category_scores": graded["category_scores"],
+            "project_evidence": graded["project_evidence"],
+            "created_at": now,
+        }
+    }
+
+
+@app.post("/api/career-launchpad/plan/generate")
+def generate_career_preparation_plan(
+    req: CareerPlanGenerateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Generate a personalized preparation plan using the EXISTING BRAINOVA AI Roadmap engine."""
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        prefs = ensure_user_preferences(conn, uid)
+        profile = _get_or_create_career_profile(conn, uid)
+        latest_assess = conn.execute(
+            "SELECT * FROM career_skill_assessments WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+        latest_dict = dict(latest_assess) if latest_assess else None
+        analysis = compute_skill_gap_and_readiness(
+            target_career=profile["target_career"],
+            latest_assessment=latest_dict,
+            roadmap_stats={"overall_progress_percent": 0},
+            quiz_stats={"attempts_count": 0, "average_percentage": 0},
+        )
+        gap_labels = [p["label"] for p in analysis["priority_areas"]] or analysis["missing_skills"][:4]
+        priorities_str = ", ".join(gap_labels) if gap_labels else "DSA, System Fundamentals, Portfolio Projects"
+        if req.focus_note.strip():
+            priorities_str = f"{priorities_str}. {req.focus_note.strip()}"
+
+        role_title = profile["target_job_role"] or profile["target_career"]
+        draft = generateRoadmap(
+            target_role=role_title,
+            skill_level=profile["current_skill_level"] or "Intermediate",
+            hours_per_week=int(profile["available_hours_per_week"] or 14),
+            preferred_stack=profile["target_career"],
+            existing_knowledge=(
+                f"Assessed overall score: {latest_dict['overall_score']}%"
+                if latest_dict
+                else "Baseline skill assessment pending"
+            ),
+            target_completion_date=profile["target_deadline"] or "",
+            priorities=priorities_str,
+            exam_goals=f"Internship / Fresher Readiness ({profile['target_company'] or profile['target_career']})",
+            user_prefs=prefs,
+        )
+    return {"draft_roadmap": draft, "profile": profile, "priority_gaps": gap_labels}
+
+
+@app.get("/api/mentor/conversations")
+def list_mentor_conversations(
+    q: str = Query("", max_length=120),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    search = q.strip().lower()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, messages_json, created_at, updated_at
+            FROM ai_conversations
+            WHERE user_id = ? AND context_type = 'career_mentor'
+            ORDER BY updated_at DESC
+            """,
+            (uid,),
+        ).fetchall()
+    items: List[Dict[str, Any]] = []
+    for r in rows:
+        msgs = json.loads(r["messages_json"] or "[]")
+        if search:
+            in_title = search in (r["title"] or "").lower()
+            in_msgs = any(search in str(m.get("content") or "").lower() for m in msgs)
+            if not (in_title or in_msgs):
+                continue
+        last_preview = ""
+        if msgs:
+            last_preview = str(msgs[-1].get("content") or "").strip().replace("\n", " ")[:90]
+        items.append({
+            "id": r["id"],
+            "title": r["title"],
+            "message_count": len(msgs),
+            "last_preview": last_preview,
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+        })
+    return {"conversations": items}
+
+
+@app.post("/api/mentor/conversations")
+def create_mentor_conversation(
+    req: MentorConversationCreateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    conv_id = new_id("mconv")
+    now = utc_now()
+    title = req.title.strip() or "New Mentor Conversation"
+    with get_db(commit=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO ai_conversations (id, user_id, context_type, title, source_ids_json, messages_json, draft_roadmap_json, created_at, updated_at)
+            VALUES (?, ?, 'career_mentor', ?, '[]', '[]', '', ?, ?)
+            """,
+            (conv_id, uid, title, now, now),
+        )
+    return {
+        "conversation": {
+            "id": conv_id,
+            "title": title,
+            "messages": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+    }
+
+
+@app.get("/api/mentor/conversations/{conv_id}")
+def get_mentor_conversation(
+    conv_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT id, title, messages_json, created_at, updated_at
+            FROM ai_conversations
+            WHERE id = ? AND user_id = ? AND context_type = 'career_mentor'
+            """,
+            (conv_id, uid),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {
+        "conversation": {
+            "id": row["id"],
+            "title": row["title"],
+            "messages": json.loads(row["messages_json"] or "[]"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+    }
+
+
+@app.patch("/api/mentor/conversations/{conv_id}")
+def rename_mentor_conversation(
+    conv_id: str,
+    req: MentorConversationRenameRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    clean_title = req.title.strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="Conversation title cannot be empty.")
+    now = utc_now()
+    with get_db(commit=True) as conn:
+        res = conn.execute(
+            """
+            UPDATE ai_conversations
+            SET title = ?, updated_at = ?
+            WHERE id = ? AND user_id = ? AND context_type = 'career_mentor'
+            """,
+            (clean_title, now, conv_id, uid),
+        )
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"id": conv_id, "title": clean_title, "updated_at": now}
+
+
+@app.delete("/api/mentor/conversations/{conv_id}")
+def delete_mentor_conversation(
+    conv_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        res = conn.execute(
+            "DELETE FROM ai_conversations WHERE id = ? AND user_id = ? AND context_type = 'career_mentor'",
+            (conv_id, uid),
+        )
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"deleted": True, "id": conv_id}
+
+
+@app.post("/api/mentor/conversations/{conv_id}/feedback")
+def set_mentor_message_feedback(
+    conv_id: str,
+    req: MentorFeedbackRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        row = conn.execute(
+            "SELECT messages_json FROM ai_conversations WHERE id = ? AND user_id = ? AND context_type = 'career_mentor'",
+            (conv_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        msgs = json.loads(row["messages_json"] or "[]")
+        found = False
+        for m in msgs:
+            if m.get("id") == req.message_id:
+                m["feedback"] = None if req.feedback == "none" else req.feedback
+                found = True
+                break
+        if not found:
+            raise HTTPException(status_code=404, detail="Message not found.")
+        conn.execute(
+            "UPDATE ai_conversations SET messages_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (json.dumps(msgs), utc_now(), conv_id, uid),
+        )
+    return {"updated": True, "message_id": req.message_id, "feedback": req.feedback}
+
+
+MENTOR_IMAGES_DIR = os.path.join(DATA_DIR, "mentor_images")
+
+
+class MentorImageGenerateRequest(BaseModel):
+    prompt: str = Field(..., min_length=3, max_length=1000)
+
+
+@app.post("/api/mentor/conversations/{conv_id}/image")
+def generate_mentor_conversation_image(
+    conv_id: str,
+    req: MentorImageGenerateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        allowed, retry_after = check_and_increment_mentor_rate_limit(conn, uid, limit_per_minute=20)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit reached. Please wait {retry_after} seconds before generating an image.",
+            )
+        row = conn.execute(
+            "SELECT id, messages_json FROM ai_conversations WHERE id = ? AND user_id = ? AND context_type = 'career_mentor'",
+            (conv_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        prefs = ensure_user_preferences(conn, uid)
+        existing_msgs = json.loads(row["messages_json"] or "[]")
+
+    img_id = new_id("mimg")
+    result = generate_mentor_image(req.prompt, prefs, MENTOR_IMAGES_DIR, uid, img_id)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=int(result.get("status") or 502),
+            detail={"code": result.get("code", "image_generation_failed"), "message": result.get("message", "Image generation failed.")},
+        )
+
+    img_msg = {
+        "id": new_id("mmsg"),
+        "role": "assistant",
+        "content": f"Generated educational illustration (illustrative only) for: *{result['prompt']}*",
+        "provider": result["provider"],
+        "image": {
+            "id": result["image_id"],
+            "url": f"/api/mentor/images/{result['image_id']}",
+            "prompt": result["prompt"],
+            "mime_type": result["mime_type"],
+            "illustrative_only": True,
+        },
+        "timestamp": utc_now(),
+    }
+    existing_msgs.append(img_msg)
+    with get_db(commit=True) as conn:
+        conn.execute(
+            "UPDATE ai_conversations SET messages_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (json.dumps(existing_msgs), utc_now(), conv_id, uid),
+        )
+    return {"message": img_msg}
+
+
+@app.get("/api/mentor/images/{image_id}")
+def get_mentor_generated_image(
+    image_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    uid = current_user["id"]
+    safe_uid = re.sub(r"[^A-Za-z0-9_-]", "", uid)
+    safe_img = re.sub(r"[^A-Za-z0-9_-]", "", image_id)
+    if not safe_img:
+        raise HTTPException(status_code=400, detail="Invalid image ID.")
+    for ext, media in ((".png", "image/png"), (".jpg", "image/jpeg"), (".webp", "image/webp")):
+        candidate = os.path.join(MENTOR_IMAGES_DIR, f"{safe_uid}__{safe_img}{ext}")
+        if os.path.isfile(candidate):
+            return FileResponse(candidate, media_type=media)
+    raise HTTPException(status_code=404, detail="Generated image not found.")
+
+
+def _create_mentor_sse_generator(
+    conv_id: str,
+    uid: str,
+    title: str,
+    msgs: List[Dict[str, Any]],
+    prefs: Dict[str, Any],
+    career_ctx: Optional[Dict[str, Any]],
+):
+    assistant_id = new_id("mmsg")
+    final_text = ""
+    provider_used = ""
+    errored = False
+    for evt in stream_mentor_reply(msgs, user_prefs=prefs, career_context=career_ctx):
+        if evt.get("type") == "done":
+            final_text = evt.get("text") or ""
+            provider_used = evt.get("provider") or ""
+            done_payload = {
+                "type": "done",
+                "message": {
+                    "id": assistant_id,
+                    "role": "assistant",
+                    "content": final_text,
+                    "provider": provider_used,
+                    "timestamp": utc_now(),
+                },
+                "title": title,
+            }
+            with get_db(commit=True) as save_conn:
+                latest_row = save_conn.execute(
+                    "SELECT messages_json FROM ai_conversations WHERE id = ? AND user_id = ?",
+                    (conv_id, uid),
+                ).fetchone()
+                if latest_row:
+                    latest_msgs = json.loads(latest_row["messages_json"] or "[]")
+                    latest_msgs.append(done_payload["message"])
+                    save_conn.execute(
+                        "UPDATE ai_conversations SET messages_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                        (json.dumps(latest_msgs), utc_now(), conv_id, uid),
+                    )
+            yield f"data: {json.dumps(done_payload)}\n\n"
+        elif evt.get("type") == "error":
+            errored = True
+            yield f"data: {json.dumps(evt)}\n\n"
+        else:
+            yield f"data: {json.dumps(evt)}\n\n"
+
+    if not final_text and not errored:
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Stream ended unexpectedly.'})}\n\n"
+
+
+@app.post("/api/mentor/conversations/{conv_id}/stream")
+def stream_mentor_conversation_turn(
+    conv_id: str,
+    req: MentorStreamRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    uid = current_user["id"]
+    clean_message = req.message.strip()
+    if not req.regenerate and not clean_message:
+        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+
+    with get_db(commit=True) as conn:
+        allowed, retry_after = check_and_increment_mentor_rate_limit(conn, uid, limit_per_minute=20)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit reached. Please wait {retry_after} seconds before sending another message.",
+            )
+
+        row = conn.execute(
+            "SELECT id, title, messages_json FROM ai_conversations WHERE id = ? AND user_id = ? AND context_type = 'career_mentor'",
+            (conv_id, uid),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+
+        msgs: List[Dict[str, Any]] = json.loads(row["messages_json"] or "[]")
+        title = row["title"]
+        now = utc_now()
+
+        if req.regenerate:
+            if msgs and msgs[-1].get("role") == "assistant":
+                msgs.pop()
+            if not msgs:
+                raise HTTPException(status_code=400, detail="No user message to regenerate.")
+        else:
+            user_msg = {
+                "id": new_id("mmsg"),
+                "role": "user",
+                "content": clean_message,
+                "timestamp": now,
+            }
+            msgs.append(user_msg)
+            if len(msgs) == 1 and title in ("New Mentor Conversation", "Untitled Conversation", ""):
+                title = extract_conversation_title(clean_message)
+
+        conn.execute(
+            "UPDATE ai_conversations SET title = ?, messages_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (title, json.dumps(msgs), now, conv_id, uid),
+        )
+        prefs = ensure_user_preferences(conn, uid)
+        profile_row = conn.execute("SELECT target_career, current_skill_level FROM career_profiles WHERE user_id = ?", (uid,)).fetchone()
+        career_ctx = dict(profile_row) if profile_row else None
+
+    return StreamingResponse(
+        _create_mentor_sse_generator(conv_id, uid, title, msgs, prefs, career_ctx),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ============================================================================
+# TECH PULSE — TRUSTWORTHY DAILY TECHNOLOGY INTELLIGENCE
+# ============================================================================
+
+
+@app.get("/api/tech-pulse/feed")
+def tech_pulse_feed(
+    category: Optional[str] = None,
+    verified_only: bool = False,
+    q: Optional[str] = None,
+    limit: int = 40,
+    offset: int = 0,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    with get_db(commit=False) as conn:
+        return get_daily_feed(
+            conn=conn,
+            user_id=current_user["id"],
+            category=category,
+            verified_only=verified_only,
+            query=q,
+            limit=limit,
+            offset=offset,
+        )
+
+
+@app.get("/api/tech-pulse/categories")
+def tech_pulse_categories(current_user: Dict[str, Any] = Depends(get_current_user)):
+    _ = current_user
+    return {"categories": TECH_PULSE_CATEGORIES}
+
+
+@app.get("/api/tech-pulse/metadata")
+def tech_pulse_metadata(current_user: Dict[str, Any] = Depends(get_current_user)):
+    _ = current_user
+    with get_db(commit=False) as conn:
+        last_run = conn.execute(
+            """
+            SELECT id, started_at, finished_at, status, sources_checked, discovered_count, published_count
+            FROM tech_pulse_ingestion_runs
+            ORDER BY started_at DESC LIMIT 1
+            """
+        ).fetchone()
+        active_sources = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM tech_pulse_sources WHERE enabled = 1"
+        ).fetchone()
+        return {
+            "ist_date": to_ist_date_str(),
+            "timezone": "Asia/Kolkata (IST)",
+            "active_source_count": int(active_sources["cnt"]) if active_sources else 0,
+            "last_run": last_run,
+        }
+
+
+@app.get("/api/tech-pulse/stories/{story_id}")
+def tech_pulse_story_detail(
+    story_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    with get_db(commit=False) as conn:
+        story = get_story_detail(conn, current_user["id"], story_id)
+        if not story:
+            raise HTTPException(status_code=404, detail="Tech Pulse story not found.")
+        return {"story": story}
+
+
+@app.get("/api/tech-pulse/saved")
+def tech_pulse_saved_list(current_user: Dict[str, Any] = Depends(get_current_user)):
+    with get_db(commit=False) as conn:
+        return {"stories": list_saved_stories(conn, current_user["id"])}
+
+
+@app.post("/api/tech-pulse/saved/{story_id}")
+def tech_pulse_save_story(
+    story_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    with get_db(commit=True) as conn:
+        saved = save_story_bookmark(conn, current_user["id"], story_id)
+        if not saved:
+            raise HTTPException(status_code=404, detail="Tech Pulse story not found.")
+        return {"saved": True, "story": saved}
+
+
+@app.delete("/api/tech-pulse/saved/{story_id}")
+def tech_pulse_unsave_story(
+    story_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    with get_db(commit=True) as conn:
+        removed = remove_story_bookmark(conn, current_user["id"], story_id)
+        return {"saved": False, "removed": removed}
+
+
+@app.post("/api/tech-pulse/refresh")
+def tech_pulse_refresh(current_user: Dict[str, Any] = Depends(get_current_user)):
+    _ = current_user
+    with get_db(commit=True) as conn:
+        result = run_ingestion_cycle(conn, trigger_type="manual")
+        return result
 
 
 # ============================================================================
