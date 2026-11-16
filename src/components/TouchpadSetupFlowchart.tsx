@@ -63,7 +63,7 @@ const STEPS: StepMeta[] = [
     badge: 'STEP 05',
     badgeTone: 'success',
     title: 'Your Focus Environment Is Ready',
-    instruction: 'Return to BRAINOVA and test your touchpad.',
+    instruction: 'Return to StudyOS and test your touchpad.',
   },
 ];
 
@@ -164,7 +164,7 @@ export const TouchpadSetupFlowchart: React.FC = () => {
             </div>
             <div className="tpf-screen-body">
               <Laptop size={20} className="tpf-screen-icon" />
-              <span>BRAINOVA Focus</span>
+              <span>StudyOS Focus</span>
             </div>
           </div>
 
@@ -400,7 +400,7 @@ export const TouchpadSetupFlowchart: React.FC = () => {
                         <div className="tpf-final-reveal">
                           <div className="tpf-final-laptop" aria-hidden="true">
                             <ShieldCheck size={22} />
-                            <span>BRAINOVA Focus Mode</span>
+                            <span>StudyOS Focus Mode</span>
                           </div>
                           <div className="tpf-final-heading">FOCUS WITHOUT INTERRUPTIONS</div>
                           <p className="tpf-final-sub">
@@ -444,7 +444,7 @@ export const TouchpadSetupFlowchart: React.FC = () => {
               <Info size={14} aria-hidden="true" />
               <span>
                 This configuration changes a Windows system-wide setting. It affects other
-                applications too, not only BRAINOVA.
+                applications too, not only StudyOS.
               </span>
             </p>
             <p className="tpf-restore-note">
@@ -452,7 +452,7 @@ export const TouchpadSetupFlowchart: React.FC = () => {
               <span>
                 Designed for Windows 11 devices with compatible Precision Touchpad drivers. Some
                 laptops or drivers expose different options—if you cannot find Swipes or Nothing,
-                your hardware or driver may not expose that setting. BRAINOVA cannot modify Windows
+                your hardware or driver may not expose that setting. StudyOS cannot modify Windows
                 Settings from Chrome.
               </span>
             </p>

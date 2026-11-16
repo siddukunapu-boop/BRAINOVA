@@ -643,7 +643,7 @@ export const StudyJournalPage: React.FC = () => {
         {phase === 'closed' && (
           <SharedNotebookCover
             idPrefix="study"
-            badge="BRAINOVA • ACADEMIC EDITION"
+            badge="StudyOS • ACADEMIC EDITION"
             title="Study Journal"
             subtitle={
               entryId && (title || topic)

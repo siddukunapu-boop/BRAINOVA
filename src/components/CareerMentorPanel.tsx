@@ -91,7 +91,7 @@ const MentorImageCard: React.FC<{
     if (!blobUrl) return;
     const a = document.createElement('a');
     a.href = blobUrl;
-    a.download = `brainova-illustration-${image.id}.png`;
+    a.download = `studyos-illustration-${image.id}.png`;
     a.click();
   };
 
@@ -683,9 +683,9 @@ export const CareerMentorPanel: React.FC = () => {
           ) : messages.length === 0 && !streaming ? (
             <div className="bnv-mentor-welcome">
               <div className="bnv-mentor-welcome-brand">
-                <BrainovaLogo size={48} variant="auth" alt="BRAINOVA AI Mentor" />
+                <BrainovaLogo size={48} variant="auth" alt="StudyOS AI Mentor" />
                 <div>
-                  <h3>BRAINOVA AI Mentor</h3>
+                  <h3>StudyOS AI Mentor</h3>
                   <p>
                     General-purpose AI assistant for programming, DSA, mathematics, architecture
                     diagrams, academic concepts, and career preparation.
@@ -732,7 +732,7 @@ export const CareerMentorPanel: React.FC = () => {
                     className={`bnv-mentor-msg bnv-mentor-msg--${msg.role}`}
                   >
                     <div className="bnv-mentor-msg-role">
-                      {msg.role === 'user' ? 'You' : 'BRAINOVA AI Mentor'}
+                      {msg.role === 'user' ? 'You' : 'StudyOS AI Mentor'}
                     </div>
                     <div className="bnv-mentor-msg-bubble">
                       {msg.role === 'assistant' ? (
@@ -813,7 +813,7 @@ export const CareerMentorPanel: React.FC = () => {
               {streaming && (
                 <div className="bnv-mentor-msg bnv-mentor-msg--assistant">
                   <div className="bnv-mentor-msg-role">
-                    BRAINOVA AI Mentor · Generating…
+                    StudyOS AI Mentor · Generating…
                   </div>
                   <div className="bnv-mentor-msg-bubble">
                     {streamingText ? (

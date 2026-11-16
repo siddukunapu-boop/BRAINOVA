@@ -547,7 +547,7 @@ const MermaidDiagramBlock: React.FC<MermaidDiagramBlockProps> = ({ source }) => 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `brainova-diagram-${parsed.valid ? parsed.kind : 'chart'}.svg`;
+    a.download = `studyos-diagram-${parsed.valid ? parsed.kind : 'chart'}.svg`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -575,7 +575,7 @@ const MermaidDiagramBlock: React.FC<MermaidDiagramBlockProps> = ({ source }) => 
         const pngUrl = canvas.toDataURL('image/png');
         const a = document.createElement('a');
         a.href = pngUrl;
-        a.download = `brainova-diagram-${parsed.valid ? parsed.kind : 'chart'}.png`;
+        a.download = `studyos-diagram-${parsed.valid ? parsed.kind : 'chart'}.png`;
         a.click();
       }
       URL.revokeObjectURL(url);

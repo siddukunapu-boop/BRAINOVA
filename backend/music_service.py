@@ -76,7 +76,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 12.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     {
         "id": "builtin_study_piano",
@@ -88,7 +88,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 12.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     {
         "id": "builtin_study_ambient",
@@ -100,7 +100,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 12.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     # B. Deep Focus
     {
@@ -113,7 +113,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 12.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     {
         "id": "builtin_focus_minimal",
@@ -125,7 +125,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 12.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     {
         "id": "builtin_focus_shield",
@@ -137,7 +137,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 12.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     # C. Focus Noise
     {
@@ -150,7 +150,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 10.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     {
         "id": "builtin_noise_white",
@@ -162,7 +162,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 10.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     {
         "id": "builtin_noise_pink",
@@ -174,7 +174,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 10.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     # D. Nature & Ambient
     {
@@ -187,7 +187,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 10.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     {
         "id": "builtin_nature_forest",
@@ -199,7 +199,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 12.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
     {
         "id": "builtin_nature_ocean",
@@ -211,7 +211,7 @@ BUILTIN_TRACKS: List[Dict[str, Any]] = [
         "mime_type": "audio/wav",
         "duration_seconds": 12.0,
         "is_builtin": True,
-        "license": "BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)",
+        "license": "StudyOS Original Synthesized Audio (CC0 / Royalty-Free)",
     },
 ]
 

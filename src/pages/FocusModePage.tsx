@@ -199,13 +199,13 @@ export const FocusModePage: React.FC = () => {
         <div className="focus-hero-content">
           <div className="focus-hero-kicker">
             <ShieldCheck size={16} aria-hidden="true" />
-            <span>BRAINOVA STRICT FOCUS MODE</span>
+            <span>StudyOS STRICT FOCUS MODE</span>
           </div>
           <h1 className="focus-hero-title">Distraction-Protected Study Environment</h1>
           <p className="focus-hero-subtitle">
             Enter browser fullscreen with all-keys Keyboard Lock (where supported), external
             navigation guards, visibility monitoring, wake lock, and an authoritative backend timer
-            — while keeping every BRAINOVA learning tool completely usable.
+            — while keeping every StudyOS learning tool completely usable.
           </p>
         </div>
         <div className="focus-hero-caps" aria-label="Browser capability readiness">
@@ -265,7 +265,7 @@ export const FocusModePage: React.FC = () => {
 
               <div className="focus-workspace-links">
                 <div className="focus-workspace-links-label">
-                  Continue studying anywhere in BRAINOVA:
+                  Continue studying anywhere in StudyOS:
                 </div>
                 <div className="focus-quick-routes">
                   <Link to="/dashboard" className="btn btn-secondary btn-sm">

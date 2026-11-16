@@ -436,7 +436,7 @@ export const DiaryPage: React.FC = () => {
         {!isNotebookOpen ? (
           <SharedNotebookCover
             idPrefix="diary"
-            badge="BRAINOVA • PRIVATE EDITION"
+            badge="StudyOS • PRIVATE EDITION"
             title="Personal Diary"
             subtitle={
               activeEntryId && title

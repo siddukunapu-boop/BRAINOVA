@@ -226,7 +226,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
       <div className="app-main-wrapper">
         {/* Global Navbar (Part 2) */}
         <header className="app-topbar">
-          {/* LEFT: Exact BRAINOVA Logo + BRAINOVA Name + Global Search */}
+          {/* LEFT: Exact StudyOS Logo + StudyOS Name + Global Search */}
           <div className="topbar-left">
             <button
               type="button"

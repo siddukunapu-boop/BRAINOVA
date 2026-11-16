@@ -54,7 +54,7 @@ export const SettingsPage: React.FC = () => {
         }),
       });
       await refreshUser();
-      addToast('Updated your BRAINOVA profile settings!', 'success');
+      addToast('Updated your StudyOS profile settings!', 'success');
     } catch (err: any) {
       addToast(err.message || 'Profile update failed.', 'error');
     } finally {
@@ -97,13 +97,13 @@ export const SettingsPage: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       <div className="card card-elevated">
         <span className="badge badge-indigo" style={{ marginBottom: '6px' }}>
-          BRAINOVA PROFILE & THEME SETTINGS
+          StudyOS PROFILE &amp; THEME SETTINGS
         </span>
         <h1 style={{ fontSize: '1.65rem', marginBottom: '6px' }}>
-          Profile Settings & Theme Preferences
+          Profile Settings &amp; Theme Preferences
         </h1>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem' }}>
-          Personalize your learner profile and avatar, switch between the 4 BRAINOVA visual themes,
+          Personalize your learner profile and avatar, switch between the 4 StudyOS visual themes,
           and choose your default Indian/Global output language.
         </p>
       </div>
@@ -113,7 +113,7 @@ export const SettingsPage: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
           <Palette size={18} color="var(--accent-blue)" />
           <h2 style={{ fontSize: '1.2rem', margin: 0 }}>
-            BRAINOVA Four-Theme Visual Appearance System
+            StudyOS Four-Theme Visual Appearance System
           </h2>
         </div>
         <div className="grid-4">

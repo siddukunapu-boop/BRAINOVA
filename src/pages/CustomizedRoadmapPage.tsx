@@ -320,8 +320,18 @@ export const CustomizedRoadmapPage: React.FC = () => {
   const isCustomTutorialActive = Boolean(activeTutorial?.is_user_added);
   const isCustomReadingActive = Boolean(topicDetail?.reading?.has_custom_reading);
 
+  const getTutorialDomainLabel = (rawUrl?: string | null): string => {
+    if (!rawUrl) return 'youtube.com';
+    try {
+      const parsed = new URL(rawUrl);
+      return parsed.hostname.replace(/^www\./i, '') || 'youtube.com';
+    } catch {
+      return 'youtube.com';
+    }
+  };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <div className="crm-page-shell" style={{ display: 'flex', flexDirection: 'column', gap: '24px', minWidth: 0, maxWidth: '100%' }}>
       {/* Top Banner */}
       <div
         className="card card-elevated"
@@ -477,14 +487,17 @@ export const CustomizedRoadmapPage: React.FC = () => {
               <p style={{ color: 'var(--text-secondary)' }}>Loading topic resources...</p>
             </div>
           ) : (
-            <div className="grid-2" style={{ alignItems: 'start' }}>
+            <div className="crm-editors-grid" data-testid="customized-roadmap-editors-grid">
               {/* ============================================================
                   LEFT COLUMN: CUSTOMIZED TUTORIAL EDITOR (YOUTUBE VALIDATION)
                  ============================================================ */}
-              <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Video size={18} color="var(--accent-blue)" />
+              <div
+                className="card crm-editor-card"
+                data-testid="customized-tutorial-card"
+              >
+                <div className="crm-card-header">
+                  <div className="crm-card-title-group">
+                    <Video size={18} color="var(--accent-blue)" style={{ flexShrink: 0 }} />
                     <h3 style={{ fontSize: '1.15rem', margin: 0 }}>
                       1. Customized YouTube Tutorial
                     </h3>
@@ -499,48 +512,52 @@ export const CustomizedRoadmapPage: React.FC = () => {
                 {/* Active Tutorial Preview Card */}
                 {activeTutorial && (
                   <div
-                    style={{
-                      padding: '14px',
-                      borderRadius: '12px',
-                      background: 'var(--bg-charcoal)',
-                      border: '1px solid var(--border-subtle)',
-                      display: 'flex',
-                      gap: '14px',
-                      alignItems: 'center',
-                    }}
+                    className="crm-tutorial-preview"
+                    data-testid="customized-tutorial-preview"
                   >
-                    {activeTutorial.video_id && (
-                      <img
-                        src={`https://i.ytimg.com/vi/${activeTutorial.video_id}/hqdefault.jpg`}
-                        alt={activeTutorial.title}
-                        style={{
-                          width: 120,
-                          height: 68,
-                          borderRadius: '8px',
-                          objectFit: 'cover',
-                          flexShrink: 0,
-                        }}
-                      />
-                    )}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', gap: '6px', marginBottom: '4px' }}>
-                        <span
-                          className={
-                            activeTutorial.is_user_added ? 'badge-customized' : 'badge-original'
-                          }
+                    <div className="crm-tutorial-preview-top">
+                      {activeTutorial.video_id && (
+                        <div className="crm-tutorial-thumb-wrap">
+                          <img
+                            src={`https://i.ytimg.com/vi/${activeTutorial.video_id}/hqdefault.jpg`}
+                            alt={activeTutorial.title || 'Tutorial thumbnail'}
+                            className="crm-tutorial-thumb"
+                            loading="lazy"
+                          />
+                        </div>
+                      )}
+                      <div className="crm-tutorial-meta">
+                        <div className="crm-tutorial-badges">
+                          <span
+                            className={
+                              activeTutorial.is_user_added ? 'badge-customized' : 'badge-original'
+                            }
+                          >
+                            {activeTutorial.is_user_added ? 'CUSTOMIZED' : 'ORIGINAL'}
+                          </span>
+                          <span className="badge badge-indigo">
+                            {activeTutorial.duration || '25m'}
+                          </span>
+                          <span className="crm-tutorial-domain">
+                            {getTutorialDomainLabel(activeTutorial.url)}
+                          </span>
+                        </div>
+                        <div
+                          className="crm-tutorial-title"
+                          title={activeTutorial.title}
                         >
-                          {activeTutorial.is_user_added ? 'CUSTOMIZED' : 'ORIGINAL'}
-                        </span>
-                        <span className="badge badge-indigo">{activeTutorial.duration}</span>
-                      </div>
-                      <div style={{ fontWeight: 700, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {activeTutorial.title}
-                      </div>
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                        {activeTutorial.channel}
+                          {activeTutorial.title}
+                        </div>
+                        <div className="crm-tutorial-channel">
+                          {activeTutorial.channel || 'YouTube Educator'}
+                        </div>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+
+                    <div
+                      className="crm-tutorial-actions"
+                      data-testid="customized-tutorial-actions"
+                    >
                       <YouTubeTutorialActions
                         url={activeTutorial.url}
                         videoId={activeTutorial.video_id}
@@ -561,13 +578,13 @@ export const CustomizedRoadmapPage: React.FC = () => {
                   />
                 )}
 
-                <form onSubmit={handleSaveCustomTutorial}>
+                <form onSubmit={handleSaveCustomTutorial} className="crm-form">
                   <div className="form-group">
                     <label className="form-label">YouTube Video URL</label>
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div className="crm-url-input-row">
                       <input
                         type="url"
-                        className="form-input"
+                        className="form-input crm-url-input"
                         placeholder="https://www.youtube.com/watch?v=..."
                         value={youtubeUrl}
                         onChange={(e) => setYoutubeUrl(e.target.value)}
@@ -575,10 +592,9 @@ export const CustomizedRoadmapPage: React.FC = () => {
                       />
                       <button
                         type="button"
-                        className="btn btn-secondary btn-sm"
+                        className="btn btn-secondary btn-sm crm-validate-btn"
                         onClick={handleValidateYoutubeUrl}
                         disabled={validatingUrl}
-                        style={{ flexShrink: 0 }}
                       >
                         <Search size={14} />
                         <span>{validatingUrl ? 'Checking...' : 'Validate & Preview'}</span>
@@ -587,24 +603,15 @@ export const CustomizedRoadmapPage: React.FC = () => {
                   </div>
 
                   {validatedVideo && (
-                    <div
-                      style={{
-                        padding: '12px',
-                        borderRadius: '10px',
-                        background: 'rgba(16, 185, 129, 0.1)',
-                        border: '1px solid rgba(16, 185, 129, 0.35)',
-                        marginBottom: '14px',
-                        display: 'flex',
-                        gap: '12px',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <img
-                        src={validatedVideo.thumbnail_url}
-                        alt="Validated preview"
-                        style={{ width: 96, height: 54, borderRadius: '6px', objectFit: 'cover' }}
-                      />
-                      <div style={{ fontSize: '0.82rem' }}>
+                    <div className="crm-validated-banner">
+                      {validatedVideo.thumbnail_url && (
+                        <img
+                          src={validatedVideo.thumbnail_url}
+                          alt="Validated preview"
+                          className="crm-validated-thumb"
+                        />
+                      )}
+                      <div className="crm-validated-meta">
                         <div style={{ color: '#6ee7b7', fontWeight: 700 }}>
                           Verified YouTube Video ID: {validatedVideo.video_id}
                         </div>
@@ -625,7 +632,7 @@ export const CustomizedRoadmapPage: React.FC = () => {
                     />
                   </div>
 
-                  <div className="grid-2">
+                  <div className="crm-meta-fields-grid">
                     <div className="form-group">
                       <label className="form-label">Channel Name</label>
                       <input
@@ -648,11 +655,11 @@ export const CustomizedRoadmapPage: React.FC = () => {
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <div className="crm-submit-actions">
                     <button
                       type="submit"
                       className="btn btn-primary"
-                      style={{ flex: 1 }}
+                      style={{ flex: '1 1 200px' }}
                       disabled={savingTutorial}
                     >
                       <Save size={15} />
@@ -683,10 +690,13 @@ export const CustomizedRoadmapPage: React.FC = () => {
               {/* ============================================================
                   RIGHT COLUMN: CUSTOMIZED READING MATERIAL EDITOR
                  ============================================================ */}
-              <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <BookOpen size={18} color="var(--accent-blue)" />
+              <div
+                className="card crm-editor-card"
+                data-testid="customized-reading-card"
+              >
+                <div className="crm-card-header">
+                  <div className="crm-card-title-group">
+                    <BookOpen size={18} color="var(--accent-blue)" style={{ flexShrink: 0 }} />
                     <h3 style={{ fontSize: '1.15rem', margin: 0 }}>
                       2. Customized Reading Material
                     </h3>

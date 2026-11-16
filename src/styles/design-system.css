@@ -3598,22 +3598,109 @@ body[data-reduced-motion="true"] .nav-item.active::before {
 }
 
 .mfs-delete-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: transparent;
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: #f87171;
   cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
 }
 
 .mfs-delete-btn:hover:not(:disabled) {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.72);
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.mfs-delete-btn:focus-visible {
+  outline: 2px solid #f87171;
+  outline-offset: 2px;
+}
+
+.mfs-delete-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.mfs-delete-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mfs-confirm-modal {
+  max-width: 430px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.mfs-confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mfs-confirm-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.4);
   color: #f87171;
-  border-color: rgba(248, 113, 113, 0.45);
-  background: rgba(239, 68, 68, 0.1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mfs-confirm-title {
+  margin: 0;
+  font-size: 1.08rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.mfs-confirm-body {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.mfs-confirm-track-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-charcoal);
+  border: 1px solid var(--border-subtle);
+}
+
+.mfs-confirm-track-name {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mfs-confirm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 4px;
 }
 
 .mfs-empty-state {
@@ -3784,7 +3871,246 @@ body[data-reduced-motion="true"] .mfs-ctrl-btn,
 body[data-reduced-motion="true"] .mfs-play-btn,
 body[data-reduced-motion="true"] .mfs-cat-pill,
 body[data-reduced-motion="true"] .mfs-card-play-btn,
+body[data-reduced-motion="true"] .mfs-delete-btn,
 body[data-reduced-motion="true"] .mfs-spin {
   transition: none !important;
   animation: none !important;
+}
+
+/* ==========================================================================
+   CUSTOMIZED ROADMAP — RESPONSIVE TUTORIAL & READING EDITORS LAYOUT
+   ========================================================================== */
+
+.crm-page-shell {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.crm-editors-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+}
+
+.crm-editor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.crm-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.crm-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.crm-tutorial-preview {
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--bg-charcoal);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.crm-tutorial-preview-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+  width: 100%;
+}
+
+.crm-tutorial-thumb-wrap {
+  width: 144px;
+  height: 81px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+}
+
+.crm-tutorial-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.crm-tutorial-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.crm-tutorial-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.crm-tutorial-domain {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crm-tutorial-title {
+  font-weight: 700;
+  font-size: 0.94rem;
+  line-height: 1.38;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.crm-tutorial-channel {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.crm-tutorial-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  width: 100%;
+  min-width: 0;
+}
+
+.crm-form {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+}
+
+.crm-url-input-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+}
+
+.crm-url-input {
+  flex: 1 1 210px;
+  min-width: 0;
+}
+
+.crm-validate-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.crm-validated-banner {
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  margin-bottom: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.crm-validated-thumb {
+  width: 96px;
+  height: 54px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.crm-validated-meta {
+  flex: 1 1 180px;
+  min-width: 0;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.crm-meta-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.crm-submit-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+@media (max-width: 1120px) {
+  .crm-editors-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .crm-tutorial-preview-top {
+    flex-direction: column;
+  }
+
+  .crm-tutorial-thumb-wrap {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  .crm-tutorial-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .crm-validate-btn {
+    width: 100%;
+    justify-content: center;
+  }
 }

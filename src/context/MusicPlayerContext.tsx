@@ -111,7 +111,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 12,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_study_gentle/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_study_piano',
@@ -124,7 +124,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 12,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_study_piano/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_study_ambient',
@@ -137,7 +137,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 12,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_study_ambient/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_focus_concentration',
@@ -150,7 +150,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 12,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_focus_concentration/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_focus_minimal',
@@ -163,7 +163,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 12,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_focus_minimal/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_focus_shield',
@@ -176,7 +176,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 12,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_focus_shield/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_noise_brown',
@@ -189,7 +189,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 10,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_noise_brown/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_noise_white',
@@ -202,7 +202,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 10,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_noise_white/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_noise_pink',
@@ -215,7 +215,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 10,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_noise_pink/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_nature_rain',
@@ -228,7 +228,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 10,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_nature_rain/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_nature_forest',
@@ -241,7 +241,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 12,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_nature_forest/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
   {
     id: 'builtin_nature_ocean',
@@ -254,7 +254,7 @@ export const INITIAL_BUILTIN_TRACKS: MusicTrack[] = [
     duration_seconds: 12,
     is_builtin: true,
     stream_url: '/api/music/builtin/builtin_nature_ocean/stream',
-    license: 'BRAINOVA Original Synthesized Audio (CC0 / Royalty-Free)',
+    license: 'StudyOS Original Synthesized Audio (CC0 / Royalty-Free)',
   },
 ];
 
@@ -394,6 +394,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const loadedTrackIdRef = useRef<string | null>(null);
   const savedResumePositionRef = useRef<number>(0);
   const syncTimeoutRef = useRef<number | null>(null);
+  const deletingInFlightRef = useRef<Set<string>>(new Set());
   const volumeRef = useRef<number>(0.65);
   const isMutedRef = useRef<boolean>(false);
   const isLoopingRef = useRef<boolean>(true);
@@ -977,13 +978,17 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const deleteTrack = useCallback(
     async (trackId: string): Promise<boolean> => {
+      if (!trackId || deletingInFlightRef.current.has(trackId)) {
+        return false;
+      }
+      deletingInFlightRef.current.add(trackId);
       setDeletingTrackId(trackId);
       try {
-        await apiRequest(`/api/music/tracks/${trackId}`, {
+        await apiRequest(`/api/music/tracks/${encodeURIComponent(trackId)}`, {
           method: 'DELETE',
         });
 
-        // If the deleted track was active, stop playback and revert to default built-in track
+        // If the deleted track was active, stop playback immediately, release ObjectURL, and reset state
         if (currentTrackId === trackId || loadedTrackIdRef.current === trackId) {
           if (audioRef.current) {
             audioRef.current.pause();
@@ -991,23 +996,31 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             audioRef.current.load();
           }
           loadedTrackIdRef.current = null;
+          savedResumePositionRef.current = 0;
           revokeActiveObjectUrl();
           setIsPlaying(false);
           setCurrentTime(0);
           setCurrentTrackId('builtin_study_gentle');
+          setDuration(12);
+          persistPreferences({
+            music_last_track_id: 'builtin_study_gentle',
+            music_last_position: 0,
+            music_playback_enabled: false,
+          });
         }
 
         setUploadedTracks((prev) => prev.filter((t) => t.id !== trackId));
-        addToast('Removed uploaded audio track.', 'info');
+        addToast('Song permanently removed from your uploaded music library.', 'success');
         return true;
       } catch (err: any) {
-        addToast(err?.message || 'Failed to delete audio track.', 'error');
+        addToast(err?.message || 'Failed to delete uploaded song.', 'error');
         return false;
       } finally {
+        deletingInFlightRef.current.delete(trackId);
         setDeletingTrackId(null);
       }
     },
-    [addToast, currentTrackId, revokeActiveObjectUrl]
+    [addToast, currentTrackId, persistPreferences, revokeActiveObjectUrl]
   );
 
   const contextValue = useMemo<MusicPlayerContextValue>(

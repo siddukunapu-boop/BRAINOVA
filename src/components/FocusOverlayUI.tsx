@@ -246,7 +246,7 @@ export const FocusModalsOverlay: React.FC = () => {
             </h2>
             <div className="focus-activation-timer">{formatCountdown(remainingSeconds)}</div>
             <p className="focus-activation-sub">
-              Browser guard active · All BRAINOVA tools ready
+              Browser guard active · All StudyOS tools ready
             </p>
           </div>
         </div>
@@ -342,7 +342,7 @@ export const FocusModalsOverlay: React.FC = () => {
               {completedSession.session_title || 'Strict Focus Session'}
             </h2>
             <p className="focus-modal-desc">
-              Browser locks have been released and normal BRAINOVA navigation is restored.
+              Browser locks have been released and normal StudyOS navigation is restored.
             </p>
 
             <div className="focus-stats-grid">

@@ -82,7 +82,16 @@ export const MusicFocusSoundsSection: React.FC = () => {
 
   const [customTitle, setCustomTitle] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [confirmDeleteTrack, setConfirmDeleteTrack] = useState<MusicTrack | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleConfirmDeleteSong = async () => {
+    if (!confirmDeleteTrack || deletingTrackId) return;
+    const ok = await deleteTrack(confirmDeleteTrack.id);
+    if (ok) {
+      setConfirmDeleteTrack(null);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
@@ -151,7 +160,7 @@ export const MusicFocusSoundsSection: React.FC = () => {
             <p className="mfs-subtitle">
               Curated instrumental study tracks, deep concentration soundscapes, calibrated acoustic
               noise, and natural ambience. Playback continues seamlessly while you navigate across
-              BRAINOVA and always remains off after a browser reload until you press Play.
+              StudyOS and always remains off after a browser reload until you press Play.
             </p>
           </div>
         </div>
@@ -399,13 +408,14 @@ export const MusicFocusSoundsSection: React.FC = () => {
                       <button
                         type="button"
                         className="mfs-delete-btn"
-                        onClick={() => deleteTrack(track.id)}
+                        onClick={() => setConfirmDeleteTrack(track)}
                         disabled={deletingTrackId === track.id}
                         aria-label={`Delete ${track.title}`}
                         data-testid={`music-delete-btn-${track.id}`}
-                        title="Delete uploaded track"
+                        title="Delete uploaded song"
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={14} aria-hidden="true" />
+                        <span>{deletingTrackId === track.id ? 'Deleting...' : 'Delete'}</span>
                       </button>
                     )}
 
@@ -539,14 +549,14 @@ export const MusicFocusSoundsSection: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        className="btn btn-ghost btn-sm mfs-row-delete-btn"
-                        onClick={() => deleteTrack(ut.id)}
+                        className="mfs-delete-btn"
+                        onClick={() => setConfirmDeleteTrack(ut)}
                         disabled={deletingTrackId === ut.id}
                         aria-label={`Delete uploaded track ${ut.title}`}
                         data-testid={`music-uploaded-delete-${ut.id}`}
                       >
-                        <Trash2 size={13} />
-                        <span>Delete</span>
+                        <Trash2 size={13} aria-hidden="true" />
+                        <span>{deletingTrackId === ut.id ? 'Deleting...' : 'Delete'}</span>
                       </button>
                     </div>
                   </div>
@@ -559,11 +569,80 @@ export const MusicFocusSoundsSection: React.FC = () => {
         <div className="mfs-footnote">
           <CheckCircle2 size={14} color="var(--accent-blue)" style={{ flexShrink: 0 }} />
           <span>
-            {storageNotice} Built-in tracks are original BRAINOVA procedural acoustic soundscapes
+            {storageNotice} Built-in tracks are original StudyOS procedural acoustic soundscapes
             (CC0 / royalty-free).
           </span>
         </div>
       </div>
+
+      {/* Delete Uploaded Song Confirmation Dialog */}
+      {confirmDeleteTrack && (
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            if (!deletingTrackId) setConfirmDeleteTrack(null);
+          }}
+          data-testid="music-delete-confirm-backdrop"
+        >
+          <div
+            className="modal-panel mfs-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mfs-delete-dialog-title"
+            data-testid="music-delete-confirm-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mfs-confirm-header">
+              <div className="mfs-confirm-icon-wrap" aria-hidden="true">
+                <Trash2 size={18} />
+              </div>
+              <h3 id="mfs-delete-dialog-title" className="mfs-confirm-title">
+                Delete this uploaded song?
+              </h3>
+            </div>
+
+            <p className="mfs-confirm-body">
+              This song will be permanently removed from your uploaded music library.
+            </p>
+
+            <div className="mfs-confirm-track-pill">
+              <span className="mfs-confirm-track-name">{confirmDeleteTrack.title}</span>
+              <span className="mfs-badge-fmt">{confirmDeleteTrack.file_format}</span>
+            </div>
+
+            <div className="mfs-confirm-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setConfirmDeleteTrack(null)}
+                disabled={Boolean(deletingTrackId)}
+                data-testid="music-delete-cancel-btn"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={handleConfirmDeleteSong}
+                disabled={Boolean(deletingTrackId)}
+                data-testid="music-delete-confirm-btn"
+              >
+                {deletingTrackId === confirmDeleteTrack.id ? (
+                  <>
+                    <Loader2 size={15} className="mfs-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={15} />
+                    <span>Delete Song</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

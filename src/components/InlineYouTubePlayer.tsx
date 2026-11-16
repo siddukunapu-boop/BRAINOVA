@@ -70,7 +70,7 @@ export const InlineYouTubePlayer: React.FC<InlineYouTubePlayerProps> = ({
         )}
         <iframe
           src={resolution.embedUrl}
-          title={title || 'BRAINOVA Tutorial Video'}
+          title={title || 'StudyOS Tutorial Video'}
           className="yt-inline-iframe"
           sandbox={YOUTUBE_EMBED_SANDBOX}
           allow={YOUTUBE_EMBED_ALLOW}
@@ -86,7 +86,7 @@ export const InlineYouTubePlayer: React.FC<InlineYouTubePlayerProps> = ({
       </div>
       <div className="yt-inline-guard-bar">
         <Shield size={13} aria-hidden="true" />
-        <span>Inline BRAINOVA playback · External navigation &amp; popups restricted</span>
+        <span>Inline StudyOS playback · External navigation &amp; popups restricted</span>
       </div>
     </div>
   );

@@ -331,7 +331,7 @@ export const TechPulsePage: React.FC = () => {
               </div>
               <div>
                 <div className="tp-eyebrow-row">
-                  <span className="tp-eyebrow">BRAINOVA INTELLIGENCE</span>
+                  <span className="tp-eyebrow">StudyOS INTELLIGENCE</span>
                   {showLiveIndicator && (
                     <span className="tp-live-indicator">
                       <span className="tp-live-dot" />

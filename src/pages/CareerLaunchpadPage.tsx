@@ -279,7 +279,7 @@ export const CareerLaunchpadPage: React.FC = () => {
         body: JSON.stringify({ focus_note: focusNote }),
       });
       setDraftPlan(res.draft_roadmap);
-      addToast('Preparation plan draft generated using BRAINOVA AI Roadmap engine.', 'success');
+      addToast('Preparation plan draft generated using StudyOS AI Roadmap engine.', 'success');
     } catch (err: any) {
       addToast(err.message || 'Unable to generate preparation plan.', 'error');
     } finally {
@@ -368,7 +368,7 @@ export const CareerLaunchpadPage: React.FC = () => {
         <div className="bnv-launchpad-hero-copy">
           <span className="bnv-launchpad-badge">
             <Rocket size={13} />
-            <span>BRAINOVA Career Launchpad &amp; AI Mentor</span>
+            <span>StudyOS Career Launchpad &amp; AI Mentor</span>
           </span>
           <h1>Internship &amp; Fresher Engineering Launchpad</h1>
           <p>
@@ -814,7 +814,7 @@ export const CareerLaunchpadPage: React.FC = () => {
           <div className="card bnv-launchpad-card">
             <h2 className="bnv-section-title">Personalized Preparation Plan</h2>
             <p className="bnv-section-sub">
-              Uses the existing BRAINOVA AI Roadmap engine with your career profile, skill gaps, and deadline.
+              Uses the existing StudyOS AI Roadmap engine with your career profile, skill gaps, and deadline.
             </p>
 
             <div className="form-group">
