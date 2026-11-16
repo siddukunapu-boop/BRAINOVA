@@ -812,6 +812,48 @@ CREATE TABLE IF NOT EXISTS login_rate_limits (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS career_weekly_tasks (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    week_start_date TEXT NOT NULL,
+    day_of_week TEXT NOT NULL DEFAULT 'Mon',
+    topic TEXT NOT NULL,
+    skill_category TEXT NOT NULL DEFAULT 'programming',
+    learning_objective TEXT NOT NULL DEFAULT '',
+    activity_type TEXT NOT NULL DEFAULT 'learning',
+    planned_minutes INTEGER NOT NULL DEFAULT 45,
+    actual_minutes INTEGER NOT NULL DEFAULT 0,
+    priority TEXT NOT NULL DEFAULT 'high',
+    completion_criteria TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    source_type TEXT NOT NULL DEFAULT 'planner',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_career_weekly_tasks_user ON career_weekly_tasks(user_id, week_start_date, status);
+
+CREATE TABLE IF NOT EXISTS topic_mastery_reviews (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    topic_key TEXT NOT NULL,
+    topic_title TEXT NOT NULL,
+    skill_category TEXT NOT NULL DEFAULT 'programming',
+    roadmap_topic_id TEXT NOT NULL DEFAULT '',
+    mastery_score REAL NOT NULL DEFAULT 50,
+    ease_factor REAL NOT NULL DEFAULT 2.5,
+    interval_days INTEGER NOT NULL DEFAULT 1,
+    repetitions INTEGER NOT NULL DEFAULT 0,
+    last_score REAL NOT NULL DEFAULT 0,
+    last_reviewed_at TEXT NOT NULL DEFAULT '',
+    next_review_at TEXT NOT NULL,
+    retention_history_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_topic_mastery_reviews_user ON topic_mastery_reviews(user_id, next_review_at);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -877,10 +919,64 @@ def _migration_003_encrypt_credentials(conn: sqlite3.Connection) -> None:
     migrate_plaintext_credentials(conn)
 
 
+def _migration_004_career_planner_and_srs(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS career_weekly_tasks (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            week_start_date TEXT NOT NULL,
+            day_of_week TEXT NOT NULL DEFAULT 'Mon',
+            topic TEXT NOT NULL,
+            skill_category TEXT NOT NULL DEFAULT 'programming',
+            learning_objective TEXT NOT NULL DEFAULT '',
+            activity_type TEXT NOT NULL DEFAULT 'learning',
+            planned_minutes INTEGER NOT NULL DEFAULT 45,
+            actual_minutes INTEGER NOT NULL DEFAULT 0,
+            priority TEXT NOT NULL DEFAULT 'high',
+            completion_criteria TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            source_type TEXT NOT NULL DEFAULT 'planner',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_career_weekly_tasks_user ON career_weekly_tasks(user_id, week_start_date, status)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS topic_mastery_reviews (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            topic_key TEXT NOT NULL,
+            topic_title TEXT NOT NULL,
+            skill_category TEXT NOT NULL DEFAULT 'programming',
+            roadmap_topic_id TEXT NOT NULL DEFAULT '',
+            mastery_score REAL NOT NULL DEFAULT 50,
+            ease_factor REAL NOT NULL DEFAULT 2.5,
+            interval_days INTEGER NOT NULL DEFAULT 1,
+            repetitions INTEGER NOT NULL DEFAULT 0,
+            last_score REAL NOT NULL DEFAULT 0,
+            last_reviewed_at TEXT NOT NULL DEFAULT '',
+            next_review_at TEXT NOT NULL,
+            retention_history_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_topic_mastery_reviews_user ON topic_mastery_reviews(user_id, next_review_at)"
+    )
+
+
 SCHEMA_MIGRATIONS = [
     (1, "baseline_columns", _migration_001_baseline_columns),
     (2, "phase1_integrity_indexes", _migration_002_phase1_integrity_indexes),
     (3, "encrypt_legacy_credentials", _migration_003_encrypt_credentials),
+    (4, "career_planner_and_srs", _migration_004_career_planner_and_srs),
 ]
 
 
@@ -916,6 +1012,7 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _migration_001_baseline_columns(conn)
     _migration_002_phase1_integrity_indexes(conn)
     _migration_003_encrypt_credentials(conn)
+    _migration_004_career_planner_and_srs(conn)
 
 
 def init_db() -> None:

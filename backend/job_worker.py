@@ -145,11 +145,23 @@ def execute_job_sync(job_id: str, force_overwrite: bool = False) -> Optional[Dic
         result_id = ""
 
         if r_type == "tutorial":
+            with get_db() as conn:
+                used_rows = conn.execute(
+                    """
+                    SELECT DISTINCT tt.video_id
+                    FROM topic_tutorials tt
+                    JOIN roadmap_topics rt ON rt.id = tt.topic_id
+                    WHERE rt.roadmap_id = ? AND tt.user_id = ? AND tt.topic_id != ?
+                    """,
+                    (roadmap["id"], user_id, topic_id),
+                ).fetchall()
+                used_video_ids = {r["video_id"] for r in used_rows if r.get("video_id")}
             recs = recommendTutorials(
                 topic_title=topic["title"],
                 topic_description=topic.get("description", ""),
                 target_role=roadmap.get("target_role", ""),
                 user_prefs=prefs,
+                exclude_video_ids=used_video_ids,
             )
             with get_db(commit=True) as conn:
                 # Preserve user_custom tutorials; only replace ai_recommended if forcing or none exist

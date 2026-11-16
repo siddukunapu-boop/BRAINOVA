@@ -561,9 +561,10 @@ def format_uploaded_track_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row["id"],
         "title": row["title"],
-        "subtitle": f"Uploaded {row['file_format']} Audio ({round(int(row.get('file_size') or 0) / 1024, 1)} KB)",
+        "original_filename": row.get("original_filename") or "",
+        "subtitle": f"{row.get('original_filename') or 'Audio'} · {row['file_format']} ({round(int(row.get('file_size') or 0) / 1024, 1)} KB)",
         "category": "uploaded",
-        "category_label": "My Uploads",
+        "category_label": "Personal Library",
         "file_format": row["file_format"],
         "mime_type": row["mime_type"],
         "file_size": int(row.get("file_size") or 0),
@@ -586,25 +587,23 @@ def list_music_library_for_user(conn: sqlite3.Connection, user_id: str) -> Dict[
         (user_id,),
     ).fetchall()
 
-    builtin_list = [
-        {
-            **t,
-            "stream_url": f"/api/music/builtin/{t['id']}/stream",
-        }
-        for t in BUILTIN_TRACKS
-    ]
     uploaded_list = [format_uploaded_track_row(r) for r in rows]
 
     is_ephemeral = bool(os.environ.get("VERCEL") or os.environ.get("RENDER"))
     return {
-        "categories": BUILTIN_CATEGORIES,
-        "builtin_tracks": builtin_list,
+        "categories": [
+            {
+                "id": "uploaded",
+                "name": "Personal Music Library",
+                "description": "Your private uploaded MP3, WAV, and OGG audio tracks.",
+            }
+        ],
+        "builtin_tracks": [],
         "uploaded_tracks": uploaded_list,
         "max_upload_mb": round(get_max_audio_upload_bytes() / (1024 * 1024), 1),
         "storage_notice": (
-            "Uploaded audio files are stored in authenticated per-user server storage. "
-            "On free serverless hosting (Vercel /tmp), uploaded binary files are session-ephemeral across instance restarts, "
-            "while built-in focus tracks are always permanently available."
+            "Storage Limitation (Free Serverless Tier): On Vercel (/tmp), uploaded audio files are session-ephemeral and may be cleared on cold starts. "
+            "Metadata persists in MongoDB Atlas. For permanent cloud audio storage on a free tier, connect an S3-compatible object store such as Cloudflare R2 or Supabase Storage."
             if is_ephemeral
             else "Uploaded audio files are stored in authenticated per-user storage on disk."
         ),

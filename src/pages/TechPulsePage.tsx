@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
+import { deduplicatedGet, getCachedEntry } from '../lib/queryCache';
 import {
   filterTechPulseStories,
   getVerificationBadgeTone,
@@ -44,9 +45,10 @@ function formatUtcToIstLabel(utcString?: string): string {
 }
 
 export const TechPulsePage: React.FC = () => {
-  const [feed, setFeed] = useState<TechPulseFeedResponse | null>(null);
+  const cachedFeed = getCachedEntry<TechPulseFeedResponse>('/api/tech-pulse/feed');
+  const [feed, setFeed] = useState<TechPulseFeedResponse | null>(cachedFeed?.data || null);
   const [savedStories, setSavedStories] = useState<TechPulseStory[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cachedFeed);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -55,12 +57,12 @@ export const TechPulsePage: React.FC = () => {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (force: boolean = false) => {
     setError('');
     try {
       const [feedRes, savedRes] = await Promise.all([
-        apiRequest<TechPulseFeedResponse>('/api/tech-pulse/feed'),
-        apiRequest<{ stories: TechPulseStory[] }>('/api/tech-pulse/saved'),
+        deduplicatedGet<TechPulseFeedResponse>('/api/tech-pulse/feed', { force }),
+        deduplicatedGet<{ stories: TechPulseStory[] }>('/api/tech-pulse/saved', { force }),
       ]);
       setFeed(feedRes);
       setSavedStories(savedRes.stories || []);
@@ -81,7 +83,7 @@ export const TechPulsePage: React.FC = () => {
     setError('');
     try {
       await apiRequest('/api/tech-pulse/refresh', { method: 'POST' });
-      await loadData();
+      await loadData(true);
     } catch (err: any) {
       setError(err?.message || 'Refresh failed. Showing cached stories.');
     } finally {
@@ -423,7 +425,7 @@ export const TechPulsePage: React.FC = () => {
           <div className="tp-error-banner" role="alert">
             <AlertTriangle size={16} />
             <span>{error}</span>
-            <button type="button" onClick={loadData}>
+            <button type="button" onClick={() => loadData(true)}>
               Retry
             </button>
           </div>

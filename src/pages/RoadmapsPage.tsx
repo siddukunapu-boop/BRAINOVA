@@ -16,15 +16,42 @@ import {
   FolderPlus,
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
+import { deduplicatedGet, getCachedEntry } from '../lib/queryCache';
 import { useApp } from '../context/AppContext';
 
-const ROLE_PRESETS = [
+const ROLE_PRESETS_TECHNICAL = [
   'Full Stack Developer',
-  'Backend Developer',
   'Frontend Developer',
-  'Data Scientist',
+  'Backend Developer',
+  'Software Engineer',
+  'Data Structures and Algorithms Engineer',
+  'Competitive Programmer',
+  'AI Engineer',
   'Machine Learning Engineer',
-  'Competitive Programming',
+  'Deep Learning Engineer',
+  'Data Scientist',
+  'Data Analyst',
+  'Data Engineer',
+  'Cybersecurity Engineer',
+  'Cloud Engineer',
+  'DevOps Engineer',
+  'Site Reliability Engineer',
+  'Android Developer',
+  'iOS Developer',
+  'Quantitative Developer',
+];
+
+const ROLE_PRESETS_NON_TECH = [
+  'IAS / Civil Services',
+  'IPS / Civil Services',
+  'Indian Foreign Service (IFS)',
+  'Indian Revenue Service (IRS)',
+  'Banking Examinations',
+  'Law',
+  'Finance',
+  'Chartered Accountancy',
+  'Business Management',
+  'Marketing',
 ];
 
 export const RoadmapsPage: React.FC = () => {
@@ -32,8 +59,9 @@ export const RoadmapsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const [roadmaps, setRoadmaps] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedRoadmaps = getCachedEntry<{ roadmaps: any[] }>('/api/roadmaps');
+  const [roadmaps, setRoadmaps] = useState<any[]>(cachedRoadmaps?.data?.roadmaps || []);
+  const [loading, setLoading] = useState(!cachedRoadmaps);
 
   // Conversational AI Roadmap Agent States
   const [showAgent, setShowAgent] = useState(false);
@@ -61,11 +89,37 @@ export const RoadmapsPage: React.FC = () => {
 
   // Delete Roadmap Confirmation Modal
   const [deletingRoadmap, setDeletingRoadmap] = useState<any | null>(null);
+  const [roleCategory, setRoleCategory] = useState<'technical' | 'non_technical'>('technical');
+  const [roleFilter, setRoleFilter] = useState('');
+  const [roleCatalog, setRoleCatalog] = useState<{
+    technical_roles: string[];
+    non_technical_roles: string[];
+  }>({
+    technical_roles: ROLE_PRESETS_TECHNICAL,
+    non_technical_roles: ROLE_PRESETS_NON_TECH,
+  });
 
-  const loadRoadmaps = async () => {
-    setLoading(true);
+  useEffect(() => {
+    deduplicatedGet<{ technical_roles: string[]; non_technical_roles: string[] }>(
+      '/api/roadmaps/catalog/roles'
+    )
+      .then((res) => {
+        if (res?.technical_roles?.length) {
+          setRoleCatalog({
+            technical_roles: res.technical_roles,
+            non_technical_roles: res.non_technical_roles || ROLE_PRESETS_NON_TECH,
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const loadRoadmaps = async (force: boolean = false) => {
+    if (!getCachedEntry('/api/roadmaps')) {
+      setLoading(true);
+    }
     try {
-      const res = await apiRequest<{ roadmaps: any[] }>('/api/roadmaps');
+      const res = await deduplicatedGet<{ roadmaps: any[] }>('/api/roadmaps', { force });
       setRoadmaps(res.roadmaps || []);
       if ((res.roadmaps || []).length === 0 || searchParams.get('new') === '1') {
         setShowAgent(true);
@@ -329,20 +383,52 @@ export const RoadmapsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Quick Role Presets */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
-            {ROLE_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                className={`btn btn-sm ${
-                  targetRole === preset ? 'btn-primary' : 'btn-secondary'
-                }`}
-                onClick={() => setTargetRole(preset)}
-              >
-                {preset}
-              </button>
-            ))}
+          {/* Role Catalog Category Tabs & Search */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${roleCategory === 'technical' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setRoleCategory('technical')}
+            >
+              Technical Careers ({roleCatalog.technical_roles.length})
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${roleCategory === 'non_technical' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setRoleCategory('non_technical')}
+            >
+              Non-Technical &amp; Civil Services ({roleCatalog.non_technical_roles.length})
+            </button>
+            <input
+              type="text"
+              className="form-input"
+              style={{ maxWidth: '240px', padding: '6px 10px', fontSize: '0.84rem' }}
+              placeholder="Filter roles..."
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px', maxHeight: '140px', overflowY: 'auto' }}>
+            {(roleCategory === 'technical'
+              ? roleCatalog.technical_roles
+              : roleCatalog.non_technical_roles
+            )
+              .filter((preset) =>
+                !roleFilter.trim() || preset.toLowerCase().includes(roleFilter.trim().toLowerCase())
+              )
+              .map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  className={`btn btn-sm ${
+                    targetRole === preset ? 'btn-primary' : 'btn-secondary'
+                  }`}
+                  onClick={() => setTargetRole(preset)}
+                >
+                  {preset}
+                </button>
+              ))}
           </div>
 
           <div className="grid-3" style={{ marginBottom: '12px' }}>
@@ -535,6 +621,38 @@ export const RoadmapsPage: React.FC = () => {
                   </select>
                 </div>
               </div>
+
+              {/* Curriculum Quality & Coverage Indicator */}
+              {draftRoadmap.curriculum_quality && (
+                <div
+                  style={{
+                    borderRadius: '10px',
+                    padding: '12px 14px',
+                    marginBottom: '16px',
+                    background: 'var(--bg-charcoal)',
+                    border: '1px solid var(--border-subtle)',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '12px',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    fontSize: '0.82rem',
+                  }}
+                >
+                  <div>
+                    <strong style={{ color: 'var(--accent-gold, var(--accent-blue))' }}>
+                      Curriculum Coverage: {draftRoadmap.curriculum_quality.coverage_percentage}%
+                    </strong>{' '}
+                    · {draftRoadmap.curriculum_quality.verified_core_coverage} ·{' '}
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      Standard: {draftRoadmap.curriculum_quality.source_standard}
+                    </span>
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    English-only: {draftRoadmap.curriculum_quality.english_only_verified ? 'Verified' : 'Check required'} · Reviewed {draftRoadmap.curriculum_quality.last_reviewed_date}
+                  </div>
+                </div>
+              )}
 
               {/* Phases & Topics Preview Editor */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>

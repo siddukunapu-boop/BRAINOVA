@@ -75,45 +75,80 @@ export function extractApiError(
   return { message: fallback };
 }
 
+const _inflightGetRequests = new Map<string, Promise<unknown>>();
+type MutationListener = (path: string, method: string) => void;
+const _mutationListeners = new Set<MutationListener>();
+
+export function onApiMutation(listener: MutationListener): () => void {
+  _mutationListeners.add(listener);
+  return () => _mutationListeners.delete(listener);
+}
+
 export async function apiRequest<T = any>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = getStoredToken();
-  const headers = new Headers(options.headers || {});
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-  if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
+  const method = (options.method || 'GET').toUpperCase();
+  const canDedupe = method === 'GET' && !options.signal;
 
-  let response: Response;
-  try {
-    response = await fetch(resolveApiUrl(path), {
-      ...options,
-      headers,
-    });
-  } catch (err) {
-    throw new ApiError(
-      'Network request failed. Please verify the backend server is running.',
-      0
-    );
-  }
-
-  if (!response.ok) {
-    let parsed: { message: string; code?: string } = {
-      message: `Request failed (${response.status})`,
-    };
-    try {
-      const data = await response.json();
-      parsed = extractApiError(data, response.status);
-    } catch {
-      // ignore json parse error
+  if (canDedupe) {
+    const existing = _inflightGetRequests.get(path);
+    if (existing) {
+      return existing as Promise<T>;
     }
-    throw new ApiError(parsed.message, response.status, parsed.code);
   }
 
-  return response.json() as Promise<T>;
+  const executeFetch = async (): Promise<T> => {
+    const token = getStoredToken();
+    const headers = new Headers(options.headers || {});
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(resolveApiUrl(path), {
+        ...options,
+        headers,
+      });
+    } catch {
+      throw new ApiError(
+        'Network request failed. Please verify the backend server is running.',
+        0
+      );
+    }
+
+    if (!response.ok) {
+      let parsed: { message: string; code?: string } = {
+        message: `Request failed (${response.status})`,
+      };
+      try {
+        const data = await response.json();
+        parsed = extractApiError(data, response.status);
+      } catch {
+        // ignore json parse error
+      }
+      throw new ApiError(parsed.message, response.status, parsed.code);
+    }
+
+    const payload = (await response.json()) as T;
+    if (method !== 'GET') {
+      _mutationListeners.forEach((listener) => listener(path, method));
+    }
+    return payload;
+  };
+
+  if (!canDedupe) {
+    return executeFetch();
+  }
+
+  const promise = executeFetch().finally(() => {
+    _inflightGetRequests.delete(path);
+  });
+  _inflightGetRequests.set(path, promise);
+  return promise;
 }
 

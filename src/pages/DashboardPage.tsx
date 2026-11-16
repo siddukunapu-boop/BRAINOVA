@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Compass,
@@ -12,6 +12,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
+import { useCachedQuery } from '../lib/queryCache';
 import { useApp } from '../context/AppContext';
 import { DashboardStatCards } from '../components/DashboardStatCards';
 
@@ -19,26 +20,12 @@ export const DashboardPage: React.FC = () => {
   const { user, addToast } = useApp();
   const navigate = useNavigate();
 
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  const loadDashboard = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await apiRequest('/api/dashboard');
-      setData(res);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load dashboard.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadDashboard();
-  }, []);
+  const {
+    data,
+    loading,
+    error,
+    refetch: loadDashboard,
+  } = useCachedQuery<any>('/api/dashboard');
 
   if (loading) {
     return (
@@ -51,11 +38,11 @@ export const DashboardPage: React.FC = () => {
     );
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="card" style={{ padding: '32px' }}>
         <p style={{ color: 'var(--status-danger)', marginBottom: '12px' }}>{error}</p>
-        <button type="button" className="btn btn-primary" onClick={loadDashboard}>
+        <button type="button" className="btn btn-primary" onClick={() => loadDashboard(true)}>
           Retry
         </button>
       </div>

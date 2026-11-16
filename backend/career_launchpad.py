@@ -1120,3 +1120,503 @@ def generate_mentor_image(
     }
 
 
+# ============================================================================
+# PRIORITY 3: CAREER READINESS INTELLIGENCE, WEEKLY PLANNER & SPACED REPETITION
+# ============================================================================
+
+SKILL_DEPENDENCY_ORDER: Dict[str, int] = {
+    "programming": 1,
+    "dsa": 2,
+    "oop": 3,
+    "git": 4,
+    "dbms": 5,
+    "os": 6,
+    "networks": 7,
+    "web_dev": 8,
+    "projects": 9,
+}
+
+
+def compute_career_readiness_intelligence(
+    target_career: str,
+    gap_analysis: Dict[str, Any],
+    latest_assessment: Optional[Dict[str, Any]],
+    quiz_stats: Dict[str, Any],
+    roadmap_stats: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Build evidence-backed Career Readiness Intelligence:
+    - Competency radar dimensions (only backed by actual assessment/evidence data)
+    - Prioritized skill gaps (critical / important / optional)
+    - Explainable mastery evidence
+    - Top 3 actionable next steps
+    """
+    has_assessment = bool(gap_analysis.get("has_assessment"))
+    gap_items = gap_analysis.get("gap_items") or []
+    benchmarks = CAREER_BENCHMARKS.get(target_career, CAREER_BENCHMARKS["Custom"])
+
+    competency_dimensions: List[Dict[str, Any]] = []
+    prioritized_gaps: List[Dict[str, Any]] = []
+    evidence_breakdown: List[Dict[str, Any]] = []
+
+    for item in gap_items:
+        cat = item["category"]
+        current = item["current"]
+        target = int(item["target"])
+        gap = int(item["gap"])
+        importance = benchmarks.get(cat, 70)
+
+        if current is not None:
+            competency_dimensions.append(
+                {
+                    "category": cat,
+                    "label": item["label"],
+                    "current": current,
+                    "target": target,
+                }
+            )
+
+        if current is None:
+            tier = "critical"
+            est_hours = max(4, round((target / 100) * 14))
+        elif gap >= 20:
+            tier = "critical"
+            est_hours = max(4, round(gap * 0.45))
+        elif gap >= 8:
+            tier = "important"
+            est_hours = max(2, round(gap * 0.35))
+        else:
+            tier = "optional"
+            est_hours = 2 if gap > 0 else 0
+
+        dep_rank = SKILL_DEPENDENCY_ORDER.get(cat, 5)
+        priority_score = round((gap * 1.4) + (importance * 0.4) - (dep_rank * 1.5), 1)
+
+        prioritized_gaps.append(
+            {
+                "category": cat,
+                "label": item["label"],
+                "current": current,
+                "target": target,
+                "gap": gap,
+                "tier": tier,
+                "importance": importance,
+                "estimated_hours_to_improve": est_hours,
+                "dependency_rank": dep_rank,
+                "priority_score": priority_score,
+            }
+        )
+
+        # Evidence-based mastery explanation
+        if current is None:
+            verdict = "Not yet assessed"
+            reason = "Complete the Career Launchpad diagnostic assessment to establish an empirical baseline."
+        elif current >= target:
+            verdict = "Verified strong"
+            reason = f"Diagnostic score ({current}%) meets or exceeds the {target_career} benchmark ({target}%)."
+        else:
+            verdict = "Needs improvement"
+            reason = (
+                f"Diagnostic score ({current}%) is {gap} points below the {target_career} target ({target}%)."
+            )
+
+        evidence_breakdown.append(
+            {
+                "category": cat,
+                "label": item["label"],
+                "verdict": verdict,
+                "reason": reason,
+                "assessment_score": current,
+                "quiz_attempts": int(quiz_stats.get("attempts_count") or 0),
+                "quiz_avg_percent": round(float(quiz_stats.get("average_percentage") or 0), 1),
+                "roadmap_progress_percent": int(roadmap_stats.get("overall_progress_percent") or 0),
+            }
+        )
+
+    prioritized_gaps.sort(key=lambda g: g["priority_score"], reverse=True)
+
+    top_next_actions: List[Dict[str, Any]] = []
+    if not has_assessment:
+        top_next_actions.append(
+            {
+                "title": "Complete Baseline Skill Diagnostic",
+                "why_it_matters": "Establishes verified competency scores across all 9 engineering domains instead of guessing.",
+                "what_to_study": "Review core definitions across Programming, DSA, DBMS, and OS.",
+                "what_to_practice": "Take the 18-question Career Launchpad Assessment.",
+                "expected_hours": 1,
+                "success_metric": "100% assessment coverage across all 9 skill domains.",
+            }
+        )
+
+    for g in prioritized_gaps:
+        if len(top_next_actions) >= 3:
+            break
+        if g["gap"] <= 0 and g["current"] is not None:
+            continue
+        top_next_actions.append(
+            {
+                "title": f"Close {g['label']} Gap ({g['tier'].upper()})",
+                "why_it_matters": f"{g['label']} has target benchmark {g['target']}% for {target_career}.",
+                "what_to_study": f"Review {g['label']} core concepts and design trade-offs in AI Roadmaps.",
+                "what_to_practice": f"Complete focused exercises and a 20-MCQ mastery quiz in {g['label']}.",
+                "expected_hours": g["estimated_hours_to_improve"],
+                "success_metric": f"Raise {g['label']} proficiency from {g['current'] or 0}% toward {g['target']}%.",
+            }
+        )
+
+    return {
+        "competency_dimensions": competency_dimensions,
+        "prioritized_gaps": prioritized_gaps,
+        "evidence_breakdown": evidence_breakdown,
+        "top_next_actions": top_next_actions,
+        "has_empirical_data": has_assessment,
+    }
+
+
+def simulate_readiness_projection(
+    target_career: str,
+    latest_assessment: Optional[Dict[str, Any]],
+    boosts: Dict[str, int],
+    roadmap_stats: Dict[str, Any],
+    quiz_stats: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Deterministic, transparent what-if readiness projection.
+    Clearly labeled as a projection, never an employment guarantee.
+    """
+    base_analysis = compute_skill_gap_and_readiness(
+        target_career=target_career,
+        latest_assessment=latest_assessment,
+        roadmap_stats=roadmap_stats,
+        quiz_stats=quiz_stats,
+    )
+    base_scores: Dict[str, int] = {}
+    if latest_assessment and latest_assessment.get("category_scores_json"):
+        raw = json.loads(latest_assessment["category_scores_json"] or "{}")
+        base_scores = {k: int(v) for k, v in raw.items()}
+
+    simulated_scores = dict(base_scores)
+    for cat, delta in (boosts or {}).items():
+        if cat in {c["key"] for c in SKILL_CATEGORIES}:
+            current_val = simulated_scores.get(cat, 40)
+            simulated_scores[cat] = max(0, min(100, current_val + max(0, min(50, int(delta)))))
+
+    simulated_assessment = dict(latest_assessment) if latest_assessment else {
+        "category_scores_json": "{}",
+        "project_evidence_json": "{}",
+    }
+    simulated_assessment["category_scores_json"] = json.dumps(simulated_scores)
+
+    projected_analysis = compute_skill_gap_and_readiness(
+        target_career=target_career,
+        latest_assessment=simulated_assessment,
+        roadmap_stats=roadmap_stats,
+        quiz_stats=quiz_stats,
+    )
+
+    return {
+        "is_projection": True,
+        "disclaimer": "Deterministic projection based on your current readiness model — not a guarantee of hiring or exam selection.",
+        "baseline_indicator": base_analysis["readiness"]["overall_indicator"],
+        "projected_indicator": projected_analysis["readiness"]["overall_indicator"],
+        "delta": round(
+            projected_analysis["readiness"]["overall_indicator"]
+            - base_analysis["readiness"]["overall_indicator"],
+            1,
+        ),
+        "simulated_category_scores": simulated_scores,
+    }
+
+
+def _current_week_start_iso() -> str:
+    now = datetime.now(timezone.utc)
+    monday = now - timedelta(days=now.weekday())
+    return monday.strftime("%Y-%m-%d")
+
+
+def generate_adaptive_weekly_plan(
+    conn: Any,
+    user_id: str,
+    profile: Dict[str, Any],
+    gap_analysis: Dict[str, Any],
+    preserve_existing: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Generate or top-up an Adaptive Weekly Execution Plan respecting available study hours.
+    Does not silently overwrite existing user schedule tasks when preserve_existing=True.
+    """
+    from backend.database import new_id, utc_now
+
+    week_start = _current_week_start_iso()
+    existing_rows = conn.execute(
+        "SELECT * FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? ORDER BY created_at ASC",
+        (user_id, week_start),
+    ).fetchall()
+
+    if preserve_existing and existing_rows:
+        return [dict(r) for r in existing_rows]
+
+    hours_per_week = max(2, min(60, int(profile.get("available_hours_per_week") or 10)))
+    total_budget_minutes = hours_per_week * 60
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    priority_items = gap_analysis.get("priority_areas") or []
+    if not priority_items:
+        priority_items = [
+            {"category": "programming", "label": "Programming Languages", "gap": 20},
+            {"category": "dsa", "label": "DSA", "gap": 25},
+            {"category": "projects", "label": "Practical Projects", "gap": 20},
+        ]
+
+    # Cap at realistic 5-7 tasks fitting within weekly budget
+    num_tasks = min(7, max(3, hours_per_week // 2))
+    mins_per_task = max(30, min(120, total_budget_minutes // num_tasks))
+    activities = ["learning", "practice", "revision", "project"]
+
+    if not preserve_existing:
+        conn.execute(
+            "DELETE FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? AND status = 'pending'",
+            (user_id, week_start),
+        )
+
+    now = utc_now()
+    created: List[Dict[str, Any]] = []
+    for idx in range(num_tasks):
+        target_gap = priority_items[idx % len(priority_items)]
+        act = activities[idx % len(activities)]
+        cat = target_gap.get("category", "programming")
+        label = target_gap.get("label", "Core Engineering")
+        gap_val = int(target_gap.get("gap") or 15)
+        prio = "critical" if gap_val >= 20 else ("high" if gap_val >= 10 else "normal")
+        tid = new_id("wtask")
+        day = days[idx % len(days)]
+        topic = f"{label}: {act.title()} Block"
+        objective = f"Reduce {label} skill gap ({gap_val} pts) via structured {act}."
+        criteria = (
+            f"Complete {mins_per_task}m focused {act} and log >= 70% on topic check."
+        )
+        conn.execute(
+            """
+            INSERT INTO career_weekly_tasks (
+                id, user_id, week_start_date, day_of_week, topic, skill_category,
+                learning_objective, activity_type, planned_minutes, actual_minutes,
+                priority, completion_criteria, status, source_type, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending', 'planner', ?, ?)
+            """,
+            (
+                tid,
+                user_id,
+                week_start,
+                day,
+                topic,
+                cat,
+                objective,
+                act,
+                mins_per_task,
+                prio,
+                criteria,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM career_weekly_tasks WHERE id = ?", (tid,)).fetchone()
+        if row:
+            created.append(dict(row))
+    return created
+
+
+def update_weekly_task_and_rebalance(
+    conn: Any,
+    user_id: str,
+    task_id: str,
+    status: Optional[str] = None,
+    day_of_week: Optional[str] = None,
+    actual_minutes: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    from backend.database import utc_now
+
+    row = conn.execute(
+        "SELECT * FROM career_weekly_tasks WHERE id = ? AND user_id = ?",
+        (task_id, user_id),
+    ).fetchone()
+    if not row:
+        return None
+
+    next_status = status if status in ("pending", "completed", "missed", "rescheduled") else row["status"]
+    next_day = day_of_week if day_of_week in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun") else row["day_of_week"]
+    next_actual = max(0, int(actual_minutes)) if actual_minutes is not None else int(row["actual_minutes"] or 0)
+    next_prio = "critical" if next_status == "missed" else row["priority"]
+
+    # When marked missed, automatically reschedule forward to next available day if not explicitly moved
+    if next_status == "missed" and not day_of_week:
+        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        cur_idx = days.index(row["day_of_week"]) if row["day_of_week"] in days else 0
+        next_day = days[(cur_idx + 1) % len(days)]
+        next_status = "rescheduled"
+
+    conn.execute(
+        """
+        UPDATE career_weekly_tasks
+        SET status = ?, day_of_week = ?, actual_minutes = ?, priority = ?, updated_at = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (next_status, next_day, next_actual, next_prio, utc_now(), task_id, user_id),
+    )
+    updated = conn.execute("SELECT * FROM career_weekly_tasks WHERE id = ?", (task_id,)).fetchone()
+    return dict(updated) if updated else None
+
+
+def record_spaced_repetition_attempt(
+    conn: Any,
+    user_id: str,
+    topic_key: str,
+    topic_title: str,
+    skill_category: str,
+    score_percent: float,
+    roadmap_topic_id: str = "",
+) -> Dict[str, Any]:
+    """
+    Explainable SM-2-inspired spaced repetition mastery scheduler.
+    Weak performance (<60%) shortens interval to 1 day and injects a revision task into the weekly planner.
+    Strong performance (>=80%) expands interval (1 -> 3 -> 7 -> 14 -> 30 days).
+    """
+    from backend.database import new_id, utc_now
+
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
+    score = max(0.0, min(100.0, float(score_percent)))
+
+    existing = conn.execute(
+        "SELECT * FROM topic_mastery_reviews WHERE user_id = ? AND topic_key = ?",
+        (user_id, topic_key),
+    ).fetchone()
+
+    if existing:
+        prev_ease = float(existing["ease_factor"] or 2.5)
+        prev_interval = int(existing["interval_days"] or 1)
+        prev_reps = int(existing["repetitions"] or 0)
+        history = json.loads(existing["retention_history_json"] or "[]")
+    else:
+        prev_ease = 2.5
+        prev_interval = 1
+        prev_reps = 0
+        history = []
+
+    if score >= 80.0:
+        reps = prev_reps + 1
+        ease = min(3.0, round(prev_ease + 0.1, 2))
+        if reps == 1:
+            interval = 3
+        elif reps == 2:
+            interval = 7
+        else:
+            interval = min(45, round(prev_interval * ease))
+    elif score >= 60.0:
+        reps = max(1, prev_reps)
+        ease = max(1.6, round(prev_ease - 0.05, 2))
+        interval = 2 if prev_interval <= 2 else max(2, round(prev_interval * 0.8))
+    else:
+        reps = 0
+        ease = max(1.3, round(prev_ease - 0.2, 2))
+        interval = 1
+
+    next_review_dt = now_dt + timedelta(days=interval)
+    history.append({"date": now_iso, "score": round(score, 1), "interval_days": interval})
+    history = history[-12:]
+
+    if existing:
+        rev_id = existing["id"]
+        conn.execute(
+            """
+            UPDATE topic_mastery_reviews
+            SET topic_title = ?, skill_category = ?, roadmap_topic_id = ?,
+                mastery_score = ?, ease_factor = ?, interval_days = ?, repetitions = ?,
+                last_score = ?, last_reviewed_at = ?, next_review_at = ?,
+                retention_history_json = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                topic_title,
+                skill_category,
+                roadmap_topic_id,
+                round(score, 1),
+                ease,
+                interval,
+                reps,
+                round(score, 1),
+                now_iso,
+                next_review_dt.isoformat(),
+                json.dumps(history),
+                now_iso,
+                rev_id,
+                user_id,
+            ),
+        )
+    else:
+        rev_id = new_id("srs")
+        conn.execute(
+            """
+            INSERT INTO topic_mastery_reviews (
+                id, user_id, topic_key, topic_title, skill_category, roadmap_topic_id,
+                mastery_score, ease_factor, interval_days, repetitions, last_score,
+                last_reviewed_at, next_review_at, retention_history_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rev_id,
+                user_id,
+                topic_key,
+                topic_title,
+                skill_category,
+                roadmap_topic_id,
+                round(score, 1),
+                ease,
+                interval,
+                reps,
+                round(score, 1),
+                now_iso,
+                next_review_dt.isoformat(),
+                json.dumps(history),
+                now_iso,
+                now_iso,
+            ),
+        )
+
+    # Integration with Adaptive Weekly Planner: inject urgent revision task when score < 60%
+    if score < 60.0:
+        week_start = _current_week_start_iso()
+        existing_rev_task = conn.execute(
+            """
+            SELECT id FROM career_weekly_tasks
+            WHERE user_id = ? AND week_start_date = ? AND source_type = 'spaced_repetition'
+              AND topic LIKE ? AND status IN ('pending', 'rescheduled')
+            """,
+            (user_id, week_start, f"%{topic_title[:32]}%"),
+        ).fetchone()
+        if not existing_rev_task:
+            conn.execute(
+                """
+                INSERT INTO career_weekly_tasks (
+                    id, user_id, week_start_date, day_of_week, topic, skill_category,
+                    learning_objective, activity_type, planned_minutes, actual_minutes,
+                    priority, completion_criteria, status, source_type, created_at, updated_at
+                ) VALUES (?, ?, ?, 'Mon', ?, ?, ?, 'revision', 45, 0, 'critical', ?, 'pending', 'spaced_repetition', ?, ?)
+                """,
+                (
+                    new_id("wtask"),
+                    user_id,
+                    week_start,
+                    f"Revision: {topic_title}",
+                    skill_category,
+                    f"Recover retention after scoring {round(score, 1)}% on {topic_title}.",
+                    "Score >= 75% on follow-up revision quiz.",
+                    now_iso,
+                    now_iso,
+                ),
+            )
+
+    row = conn.execute("SELECT * FROM topic_mastery_reviews WHERE id = ?", (rev_id,)).fetchone()
+    return dict(row) if row else {}
+
+
+

@@ -63,12 +63,17 @@ from backend.career_launchpad import (
     SKILL_CATEGORIES,
     build_weekly_performance,
     check_and_increment_mentor_rate_limit,
+    compute_career_readiness_intelligence,
     compute_skill_gap_and_readiness,
     extract_conversation_title,
+    generate_adaptive_weekly_plan,
     generate_mentor_image,
     get_public_assessment_questions,
     grade_skill_assessment,
+    record_spaced_repetition_attempt,
+    simulate_readiness_projection,
     stream_mentor_reply,
+    update_weekly_task_and_rebalance,
 )
 from backend.database import (
     AUDIO_DIR,
@@ -1372,6 +1377,15 @@ def save_roadmap(
     with get_db() as conn:
         full_rm = _assemble_roadmap_detail(conn, roadmap_id, uid)
     return {"roadmap": full_rm}
+
+
+@app.get("/api/roadmaps/catalog/roles")
+def get_roadmap_role_catalog(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    from backend.roadmap_curriculum import get_supported_roles_catalog
+
+    return get_supported_roles_catalog()
 
 
 @app.get("/api/roadmaps")
@@ -4335,15 +4349,158 @@ def get_career_launchpad_overview(
                 "created_at": latest_dict["created_at"],
             }
 
+        readiness_intelligence = compute_career_readiness_intelligence(
+            target_career=profile["target_career"],
+            gap_analysis=analysis,
+            latest_assessment=latest_dict,
+            quiz_stats={
+                "attempts_count": int(quiz_row["cnt"] or 0) if quiz_row else 0,
+                "average_percentage": float(quiz_row["avg_pct"] or 0) if quiz_row else 0.0,
+            },
+            roadmap_stats={"overall_progress_percent": overall_progress},
+        )
+        weekly_tasks = generate_adaptive_weekly_plan(
+            conn, uid, profile, analysis, preserve_existing=True
+        )
+        revision_rows = conn.execute(
+            "SELECT * FROM topic_mastery_reviews WHERE user_id = ? ORDER BY next_review_at ASC LIMIT 20",
+            (uid,),
+        ).fetchall()
+        now_iso = utc_now()
+        revision_queue = []
+        due_revisions_count = 0
+        for rr in revision_rows:
+            rd = dict(rr)
+            rd["retention_history"] = json.loads(rd.get("retention_history_json") or "[]")
+            is_due = bool((rd.get("next_review_at") or "") <= now_iso)
+            rd["is_due"] = is_due
+            if is_due:
+                due_revisions_count += 1
+            revision_queue.append(rd)
+
         return {
             "profile": profile,
             "careers": list(CAREER_BENCHMARKS.keys()),
             "skill_categories": SKILL_CATEGORIES,
             "latest_assessment": parsed_latest,
             "gap_analysis": analysis,
+            "readiness_intelligence": readiness_intelligence,
+            "weekly_tasks": weekly_tasks,
+            "revision_queue": revision_queue,
+            "due_revisions_count": due_revisions_count,
             "weekly_performance": weekly,
             "saved_plans": [dict(r) for r in saved_roadmaps],
         }
+
+
+@app.post("/api/career-launchpad/readiness/simulate")
+def simulate_career_readiness(
+    payload: Dict[str, Any],
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    boosts = payload.get("boosts") if isinstance(payload, dict) else {}
+    with get_db() as conn:
+        profile = _get_or_create_career_profile(conn, uid)
+        latest_assess = conn.execute(
+            "SELECT * FROM career_skill_assessments WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+        latest_dict = dict(latest_assess) if latest_assess else None
+        topic_row = conn.execute(
+            "SELECT COUNT(*) AS total_topics, SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_topics FROM roadmap_topics WHERE user_id = ?",
+            (uid,),
+        ).fetchone()
+        total_topics = int(topic_row["total_topics"] or 0) if topic_row else 0
+        completed_topics = int(topic_row["completed_topics"] or 0) if topic_row else 0
+        overall_progress = round((completed_topics / total_topics) * 100) if total_topics > 0 else 0
+        quiz_row = conn.execute(
+            "SELECT COUNT(*) AS cnt, COALESCE(AVG(percentage), 0) AS avg_pct FROM quiz_attempts WHERE user_id = ?",
+            (uid,),
+        ).fetchone()
+        return simulate_readiness_projection(
+            target_career=profile["target_career"],
+            latest_assessment=latest_dict,
+            boosts=boosts or {},
+            roadmap_stats={"overall_progress_percent": overall_progress},
+            quiz_stats={
+                "attempts_count": int(quiz_row["cnt"] or 0) if quiz_row else 0,
+                "average_percentage": float(quiz_row["avg_pct"] or 0) if quiz_row else 0.0,
+            },
+        )
+
+
+@app.post("/api/career-launchpad/weekly-plan/generate")
+def regenerate_weekly_execution_plan(
+    payload: Optional[Dict[str, Any]] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    preserve = True if not payload else bool(payload.get("preserve_existing", True))
+    with get_db(commit=True) as conn:
+        profile = _get_or_create_career_profile(conn, uid)
+        latest_assess = conn.execute(
+            "SELECT * FROM career_skill_assessments WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+            (uid,),
+        ).fetchone()
+        latest_dict = dict(latest_assess) if latest_assess else None
+        analysis = compute_skill_gap_and_readiness(
+            target_career=profile["target_career"],
+            latest_assessment=latest_dict,
+            roadmap_stats={"overall_progress_percent": 0},
+            quiz_stats={"attempts_count": 0, "average_percentage": 0.0},
+        )
+        tasks = generate_adaptive_weekly_plan(
+            conn, uid, profile, analysis, preserve_existing=preserve
+        )
+        return {"weekly_tasks": tasks}
+
+
+@app.patch("/api/career-launchpad/weekly-plan/tasks/{task_id}")
+def update_career_weekly_task(
+    task_id: str,
+    payload: Dict[str, Any],
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        updated = update_weekly_task_and_rebalance(
+            conn,
+            uid,
+            task_id,
+            status=payload.get("status"),
+            day_of_week=payload.get("day_of_week"),
+            actual_minutes=payload.get("actual_minutes"),
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Weekly task not found.")
+        return {"task": updated}
+
+
+@app.post("/api/career-launchpad/revisions/record")
+def record_career_spaced_repetition(
+    payload: Dict[str, Any],
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    topic_key = str(payload.get("topic_key") or payload.get("topic_title") or "").strip()
+    topic_title = str(payload.get("topic_title") or topic_key).strip()
+    if not topic_key:
+        raise HTTPException(status_code=422, detail="topic_key or topic_title is required.")
+    skill_category = str(payload.get("skill_category") or "programming").strip()
+    score_percent = float(payload.get("score_percent") or 0.0)
+    roadmap_topic_id = str(payload.get("roadmap_topic_id") or "").strip()
+    with get_db(commit=True) as conn:
+        review = record_spaced_repetition_attempt(
+            conn,
+            uid,
+            topic_key=topic_key,
+            topic_title=topic_title,
+            skill_category=skill_category,
+            score_percent=score_percent,
+            roadmap_topic_id=roadmap_topic_id,
+        )
+        return {"review": review}
 
 
 @app.put("/api/career-launchpad/profile")
@@ -4860,8 +5017,8 @@ def tech_pulse_feed(
     offset: int = 0,
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    with get_db(commit=False) as conn:
-        return get_daily_feed(
+    with get_db(commit=True) as conn:
+        feed = get_daily_feed(
             conn=conn,
             user_id=current_user["id"],
             category=category,
@@ -4870,6 +5027,49 @@ def tech_pulse_feed(
             limit=limit,
             offset=offset,
         )
+        if feed.get("total", 0) == 0 and not category and not q and not verified_only:
+            recent_run = conn.execute(
+                "SELECT started_at FROM tech_pulse_ingestion_runs ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            should_catchup = True
+            if recent_run and recent_run.get("started_at"):
+                try:
+                    last_dt = datetime.fromisoformat(str(recent_run["started_at"]).replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - last_dt).total_seconds() < 900:
+                        should_catchup = False
+                except Exception:
+                    pass
+            if should_catchup:
+                try:
+                    run_ingestion_cycle(conn, trigger_type="auto_catchup", allow_ai=False)
+                    feed = get_daily_feed(
+                        conn=conn,
+                        user_id=current_user["id"],
+                        category=category,
+                        verified_only=verified_only,
+                        query=q,
+                        limit=limit,
+                        offset=offset,
+                    )
+                except Exception:
+                    pass
+        return feed
+
+
+@app.get("/api/cron/tech-pulse")
+def tech_pulse_cron_ingest(request: Request):
+    """
+    Scheduled background ingestion endpoint for Vercel Cron.
+    Verifies CRON_SECRET if configured; executes idempotent official RSS/Atom ingestion.
+    """
+    cron_secret = (os.environ.get("CRON_SECRET") or "").strip()
+    if cron_secret:
+        auth_header = (request.headers.get("authorization") or "").strip()
+        if auth_header != f"Bearer {cron_secret}":
+            raise HTTPException(status_code=401, detail="Unauthorized cron invocation.")
+    with get_db(commit=True) as conn:
+        result = run_ingestion_cycle(conn, trigger_type="vercel_cron", allow_ai=True)
+        return {"ok": True, "ingestion": result}
 
 
 @app.get("/api/tech-pulse/categories")
@@ -4897,6 +5097,23 @@ def tech_pulse_metadata(current_user: Dict[str, Any] = Depends(get_current_user)
             "timezone": "Asia/Kolkata (IST)",
             "active_source_count": int(active_sources["cnt"]) if active_sources else 0,
             "last_run": last_run,
+        }
+
+
+@app.get("/api/tech-pulse/diagnostics")
+def tech_pulse_diagnostics(current_user: Dict[str, Any] = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required for Tech Pulse diagnostics.")
+    with get_db(commit=False) as conn:
+        runs = conn.execute(
+            "SELECT * FROM tech_pulse_ingestion_runs ORDER BY started_at DESC LIMIT 10"
+        ).fetchall()
+        sources = conn.execute(
+            "SELECT id, name, organization, category, enabled, last_fetched_at, last_success_at, last_status, error_count, last_error FROM tech_pulse_sources ORDER BY priority ASC, name ASC"
+        ).fetchall()
+        return {
+            "recent_runs": [dict(r) for r in runs],
+            "sources": [dict(s) for s in sources],
         }
 
 

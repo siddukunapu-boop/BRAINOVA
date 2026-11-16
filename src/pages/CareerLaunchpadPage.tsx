@@ -16,6 +16,7 @@ import {
   Target,
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
+import { deduplicatedGet, getCachedEntry } from '../lib/queryCache';
 import { useApp } from '../context/AppContext';
 import { CareerMentorPanel } from '../components/CareerMentorPanel';
 import {
@@ -97,6 +98,59 @@ interface OverviewPayload {
     };
   };
   weekly_performance: WeeklyPoint[];
+  readiness_intelligence?: {
+    competency_dimensions: { category: string; label: string; current: number; target: number }[];
+    prioritized_gaps: {
+      category: string;
+      label: string;
+      current: number | null;
+      target: number;
+      gap: number;
+      tier: 'critical' | 'important' | 'optional';
+      estimated_hours_to_improve: number;
+    }[];
+    evidence_breakdown: {
+      category: string;
+      label: string;
+      verdict: string;
+      reason: string;
+    }[];
+    top_next_actions: {
+      title: string;
+      why_it_matters: string;
+      what_to_study: string;
+      what_to_practice: string;
+      expected_hours: number;
+      success_metric: string;
+    }[];
+    has_empirical_data: boolean;
+  };
+  weekly_tasks?: {
+    id: string;
+    day_of_week: string;
+    topic: string;
+    skill_category: string;
+    learning_objective: string;
+    activity_type: string;
+    planned_minutes: number;
+    actual_minutes: number;
+    priority: string;
+    completion_criteria: string;
+    status: 'pending' | 'completed' | 'missed' | 'rescheduled';
+    source_type: string;
+  }[];
+  revision_queue?: {
+    id: string;
+    topic_key: string;
+    topic_title: string;
+    skill_category: string;
+    mastery_score: number;
+    interval_days: number;
+    repetitions: number;
+    next_review_at: string;
+    is_due: boolean;
+  }[];
+  due_revisions_count?: number;
   saved_plans: {
     id: string;
     title: string;
@@ -113,10 +167,21 @@ export const CareerLaunchpadPage: React.FC = () => {
   const { user, addToast } = useApp();
   const navigate = useNavigate();
 
+  const cachedOv = getCachedEntry<OverviewPayload>('/api/career-launchpad/overview');
   const [activeTab, setActiveTab] = useState<LaunchpadTab>('overview');
-  const [overview, setOverview] = useState<OverviewPayload | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [overview, setOverview] = useState<OverviewPayload | null>(cachedOv?.data || null);
+  const [loading, setLoading] = useState(!cachedOv);
   const [error, setError] = useState('');
+  const [simBoosts, setSimBoosts] = useState<Record<string, number>>({});
+  const [simResult, setSimResult] = useState<{
+    baseline_indicator: number;
+    projected_indicator: number;
+    delta: number;
+    disclaimer: string;
+  } | null>(null);
+  const [newRevTopic, setNewRevTopic] = useState('');
+  const [newRevScore, setNewRevScore] = useState<number>(55);
+  const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
   // Profile form state
   const [profileForm, setProfileForm] = useState<CareerProfile>({
@@ -149,13 +214,15 @@ export const CareerLaunchpadPage: React.FC = () => {
 
   const draftStorageKey = `brainova_career_assess_draft_${user?.id || 'anon'}`;
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async (force: boolean = false) => {
+    if (!getCachedEntry('/api/career-launchpad/overview')) {
+      setLoading(true);
+    }
     setError('');
     try {
       const [ov, assess] = await Promise.all([
-        apiRequest<OverviewPayload>('/api/career-launchpad/overview'),
-        apiRequest<{ questions: AssessmentQuestion[] }>('/api/career-launchpad/assessment'),
+        deduplicatedGet<OverviewPayload>('/api/career-launchpad/overview', { force }),
+        deduplicatedGet<{ questions: AssessmentQuestion[] }>('/api/career-launchpad/assessment', { force }),
       ]);
       setOverview(ov);
       setProfileForm(ov.profile);
@@ -168,6 +235,78 @@ export const CareerLaunchpadPage: React.FC = () => {
       setLoading(false);
     }
   }, []);
+
+  const handleSimulateReadiness = async () => {
+    try {
+      const res = await apiRequest<any>('/api/career-launchpad/readiness/simulate', {
+        method: 'POST',
+        body: JSON.stringify({ boosts: simBoosts }),
+      });
+      setSimResult(res);
+    } catch (err: any) {
+      addToast(err.message || 'Simulation failed.', 'error');
+    }
+  };
+
+  const handleTaskUpdate = async (
+    taskId: string,
+    payload: { status?: string; day_of_week?: string; actual_minutes?: number }
+  ) => {
+    setUpdatingTaskId(taskId);
+    try {
+      await apiRequest(`/api/career-launchpad/weekly-plan/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      await loadData(true);
+    } catch (err: any) {
+      addToast(err.message || 'Failed to update weekly task.', 'error');
+    } finally {
+      setUpdatingTaskId(null);
+    }
+  };
+
+  const handleRegenerateWeeklyPlan = async (preserveExisting: boolean) => {
+    try {
+      await apiRequest('/api/career-launchpad/weekly-plan/generate', {
+        method: 'POST',
+        body: JSON.stringify({ preserve_existing: preserveExisting }),
+      });
+      addToast('Adaptive weekly schedule updated.', 'success');
+      await loadData(true);
+    } catch (err: any) {
+      addToast(err.message || 'Failed to update weekly schedule.', 'error');
+    }
+  };
+
+  const handleRecordRevision = async (topicTitle: string, skillCat: string, scorePct: number) => {
+    const cleanTitle = topicTitle.trim();
+    if (!cleanTitle) {
+      addToast('Enter a topic name to log revision mastery.', 'error');
+      return;
+    }
+    try {
+      await apiRequest('/api/career-launchpad/revisions/record', {
+        method: 'POST',
+        body: JSON.stringify({
+          topic_key: cleanTitle.toLowerCase().replace(/\s+/g, '_'),
+          topic_title: cleanTitle,
+          skill_category: skillCat,
+          score_percent: scorePct,
+        }),
+      });
+      addToast(
+        scorePct < 60
+          ? `Logged ${scorePct}% — urgent revision scheduled in Weekly Planner.`
+          : `Logged ${scorePct}% — next review interval expanded.`,
+        'success'
+      );
+      setNewRevTopic('');
+      await loadData(true);
+    } catch (err: any) {
+      addToast(err.message || 'Failed to record revision.', 'error');
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -344,7 +483,7 @@ export const CareerLaunchpadPage: React.FC = () => {
         <p style={{ color: 'var(--status-danger)', marginBottom: '12px' }}>
           {error || 'Unable to load Career Launchpad.'}
         </p>
-        <button type="button" className="btn btn-primary" onClick={loadData}>
+        <button type="button" className="btn btn-primary" onClick={() => loadData(true)}>
           Retry
         </button>
       </div>
@@ -805,6 +944,139 @@ export const CareerLaunchpadPage: React.FC = () => {
               <span>{readiness.disclaimer}</span>
             </div>
           </div>
+
+          {/* Career Readiness Intelligence: Competency Radar, Prioritized Tiers, Evidence & Simulator */}
+          {overview.readiness_intelligence && (
+            <div className="card bnv-launchpad-card" style={{ gridColumn: '1 / -1' }}>
+              <h2 className="bnv-section-title">Career Readiness Intelligence</h2>
+              <p className="bnv-section-sub">
+                Prioritized skill gaps, evidence-based mastery explanations, and deterministic readiness projection.
+              </p>
+
+              <div className="grid-2" style={{ gap: '18px', marginTop: '12px' }}>
+                {/* Prioritized Skill Gaps & Evidence */}
+                <div>
+                  <h3 style={{ fontSize: '0.98rem', marginBottom: '10px' }}>
+                    Prioritized Skill Gaps &amp; Mastery Evidence
+                  </h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {overview.readiness_intelligence.prioritized_gaps.slice(0, 6).map((pg) => {
+                      const ev = overview.readiness_intelligence?.evidence_breakdown.find(
+                        (e) => e.category === pg.category
+                      );
+                      return (
+                        <div
+                          key={pg.category}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: '10px',
+                            background: 'var(--bg-charcoal)',
+                            border: '1px solid var(--border-subtle)',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                            <strong>{pg.label}</strong>
+                            <span className="badge badge-indigo" style={{ textTransform: 'uppercase', fontSize: '0.72rem' }}>
+                              {pg.tier} · ~{pg.estimated_hours_to_improve}h
+                            </span>
+                          </div>
+                          {ev && (
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                              <strong>{ev.verdict}:</strong> {ev.reason}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Readiness Simulator & Top 3 Next Actions */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div
+                    style={{
+                      padding: '14px',
+                      borderRadius: '12px',
+                      background: 'var(--bg-charcoal)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    <h3 style={{ fontSize: '0.98rem', marginBottom: '6px' }}>
+                      Readiness Simulator (Projection Only)
+                    </h3>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+                      Explore how improving your top 3 gap skills affects your readiness indicator.
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '10px' }}>
+                      {overview.readiness_intelligence.prioritized_gaps.slice(0, 3).map((pg) => (
+                        <div key={pg.category} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '0.84rem' }}>
+                          <span>{pg.label} (+pts)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={50}
+                            className="form-input"
+                            style={{ width: '80px', padding: '4px 8px' }}
+                            value={simBoosts[pg.category] ?? 15}
+                            onChange={(e) =>
+                              setSimBoosts((prev) => ({
+                                ...prev,
+                                [pg.category]: Math.max(0, Math.min(50, Number(e.target.value) || 0)),
+                              }))
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={handleSimulateReadiness}
+                    >
+                      Simulate Readiness Projection
+                    </button>
+                    {simResult && (
+                      <div style={{ marginTop: '10px', fontSize: '0.84rem', color: 'var(--text-primary)' }}>
+                        <strong>
+                          Projected Readiness: {simResult.baseline_indicator}% → {simResult.projected_indicator}% (
+                          {simResult.delta >= 0 ? `+${simResult.delta}` : simResult.delta}%)
+                        </strong>
+                        <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                          {simResult.disclaimer}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <h3 style={{ fontSize: '0.98rem', marginBottom: '8px' }}>Top 3 Actionable Next Steps</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {overview.readiness_intelligence.top_next_actions.map((act, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: '10px',
+                            background: 'var(--bg-charcoal)',
+                            border: '1px solid var(--border-subtle)',
+                            fontSize: '0.82rem',
+                          }}
+                        >
+                          <strong>{idx + 1}. {act.title} ({act.expected_hours}h)</strong>
+                          <p style={{ color: 'var(--text-secondary)', marginTop: '3px' }}>
+                            Study: {act.what_to_study} · Practice: {act.what_to_practice}
+                          </p>
+                          <p style={{ color: 'var(--text-muted)', marginTop: '2px' }}>
+                            Success metric: {act.success_metric}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -929,6 +1201,171 @@ export const CareerLaunchpadPage: React.FC = () => {
                 })}
               </div>
             )}
+          </div>
+
+          {/* FEATURE 1: Adaptive Weekly Execution Planner */}
+          <div className="card bnv-launchpad-card" style={{ gridColumn: '1 / -1' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+              <div>
+                <h2 className="bnv-section-title">Adaptive Weekly Execution Planner</h2>
+                <p className="bnv-section-sub">
+                  Calibrated to your {overview.profile.available_hours_per_week} hrs/week availability and priority skill gaps.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleRegenerateWeeklyPlan(false)}
+              >
+                Rebalance Pending Tasks
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {(overview.weekly_tasks || []).length === 0 ? (
+                <p className="bnv-section-sub">No weekly tasks scheduled yet.</p>
+              ) : (
+                (overview.weekly_tasks || []).map((task) => (
+                  <div
+                    key={task.id}
+                    style={{
+                      padding: '12px 14px',
+                      borderRadius: '10px',
+                      background: 'var(--bg-charcoal)',
+                      border: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '12px',
+                    }}
+                  >
+                    <div style={{ flex: '1 1 280px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span className="badge badge-indigo">{task.day_of_week}</span>
+                        <strong>{task.topic}</strong>
+                        <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                          {task.activity_type} · {task.priority} · {task.planned_minutes}m planned ({task.actual_minutes}m logged)
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                        {task.learning_objective} · Criteria: {task.completion_criteria}
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <select
+                        className="form-select"
+                        style={{ width: '82px', padding: '4px 6px', fontSize: '0.8rem' }}
+                        value={task.day_of_week}
+                        disabled={updatingTaskId === task.id}
+                        onChange={(e) => handleTaskUpdate(task.id, { day_of_week: e.target.value, status: 'rescheduled' })}
+                      >
+                        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        disabled={updatingTaskId === task.id || task.status === 'completed'}
+                        onClick={() => handleTaskUpdate(task.id, { status: 'completed', actual_minutes: task.planned_minutes })}
+                      >
+                        {task.status === 'completed' ? 'Completed' : 'Complete'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        disabled={updatingTaskId === task.id}
+                        onClick={() => handleTaskUpdate(task.id, { status: 'missed' })}
+                      >
+                        Missed
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* FEATURE 2: Spaced-Repetition Mastery Tracker */}
+          <div className="card bnv-launchpad-card" style={{ gridColumn: '1 / -1' }}>
+            <h2 className="bnv-section-title">
+              Spaced-Repetition Mastery Tracker ({overview.due_revisions_count || 0} Due)
+            </h2>
+            <p className="bnv-section-sub">
+              Tracks topic-level retention using explainable intervals. Scores under 60% automatically schedule urgent revision in your Weekly Planner.
+            </p>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '14px', alignItems: 'center' }}>
+              <input
+                type="text"
+                className="form-input"
+                style={{ flex: '1 1 220px', maxWidth: '340px' }}
+                placeholder="Topic reviewed (e.g. Dynamic Programming)"
+                value={newRevTopic}
+                onChange={(e) => setNewRevTopic(e.target.value)}
+              />
+              <input
+                type="number"
+                min={0}
+                max={100}
+                className="form-input"
+                style={{ width: '96px' }}
+                value={newRevScore}
+                onChange={(e) => setNewRevScore(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                title="Revision Quiz / Practice Score (%)"
+              />
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => handleRecordRevision(newRevTopic, 'dsa', newRevScore)}
+              >
+                Log Revision Score
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {(overview.revision_queue || []).length === 0 ? (
+                <p className="bnv-section-sub">No spaced-repetition items logged yet. Log a topic revision above to start tracking intervals.</p>
+              ) : (
+                (overview.revision_queue || []).map((rev) => (
+                  <div
+                    key={rev.id}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '10px',
+                      background: 'var(--bg-charcoal)',
+                      border: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '10px',
+                      fontSize: '0.84rem',
+                    }}
+                  >
+                    <div>
+                      <strong>{rev.topic_title}</strong>{' '}
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        · Mastery {rev.mastery_score}% · Interval {rev.interval_days}d · Repetitions {rev.repetitions}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <span className="badge badge-indigo">
+                        {rev.is_due ? 'Due Now' : `Next: ${rev.next_review_at.slice(0, 10)}`}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleRecordRevision(rev.topic_title, rev.skill_category, 85)}
+                      >
+                        Mark Strong (85%)
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}

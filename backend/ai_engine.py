@@ -590,154 +590,17 @@ def _build_tailored_roadmap_fallback(
     priorities: str,
     exam_goals: str,
 ) -> Dict[str, Any]:
-    role_lower = target_role.lower()
-    matched_phases = None
-    for key, template in ROLE_CURRICULUM_TEMPLATES.items():
-        if key in role_lower:
-            matched_phases = json.loads(json.dumps(template))
-            break
+    from backend.roadmap_curriculum import build_comprehensive_role_curriculum
 
-    if not matched_phases:
-        # Dynamic multi-phase curriculum adapted to any custom role/goal
-        stack_note = f" ({preferred_stack})" if preferred_stack else ""
-        matched_phases = [
-            {
-                "title": f"Phase 1: Core Foundations of {target_role}{stack_note}",
-                "description": f"Establish rigorous fundamental concepts, terminology, and mental models for {target_role}.",
-                "completion_criteria": f"Complete foundational exercises and pass all Phase 1 assessments for {target_role}.",
-                "topics": [
-                    {
-                        "title": f"{target_role} Architecture, Core Principles & Ecosystem",
-                        "description": f"Essential building blocks, industry standards, and foundational workflows in {target_role}.",
-                        "subtopics": [
-                            f"Core abstractions and mental models in {target_role}",
-                            f"Standard toolchain setup and workflow automation{stack_note}",
-                            "Quality metrics, correctness, and maintainability",
-                            "Debugging methodologies and root-cause analysis",
-                        ],
-                        "prerequisites": [existing_knowledge or "General analytical & computing foundations"],
-                        "difficulty": "Beginner" if skill_level == "Beginner" else "Intermediate",
-                        "estimated_hours": 10,
-                        "learning_objectives": [
-                            f"Explain the core architectural components of {target_role}",
-                            "Configure a reproducible development and verification workflow",
-                            "Analyze trade-offs between standard implementation approaches",
-                        ],
-                        "practical_exercises": [
-                            f"Set up a baseline {target_role} workspace and run verification benchmarks",
-                            "Document the data flow and component boundaries of a reference system",
-                        ],
-                        "project_checkpoint": f"{target_role} Foundation Prototype",
-                        "completion_criteria": "Pass the 20-question MCQ exam with >= 70% accuracy.",
-                    },
-                    {
-                        "title": f"Data Structures, State Modeling & Algorithmic Problem Solving for {target_role}",
-                        "description": "Representing domain entities, optimizing algorithmic complexity, and ensuring deterministic state transitions.",
-                        "subtopics": [
-                            "Time and space complexity analysis (Big-O)",
-                            "Domain modeling, invariants, and schema validation",
-                            "Hash maps, trees, graphs, and queue processing",
-                            "Edge-case analysis and defensive implementation",
-                        ],
-                        "prerequisites": [f"{target_role} Architecture, Core Principles & Ecosystem"],
-                        "difficulty": "Intermediate",
-                        "estimated_hours": 12,
-                        "learning_objectives": [
-                            "Select optimal data structures for latency and memory constraints",
-                            "Enforce strict schema invariants across module boundaries",
-                        ],
-                        "practical_exercises": [
-                            "Implement a schema-validated domain processing pipeline",
-                            "Profile and optimize a bottleneck data transformation routine",
-                        ],
-                        "project_checkpoint": "High-Throughput Domain Engine",
-                        "completion_criteria": "Pass the 20-question MCQ exam and complete practical exercises.",
-                    },
-                ],
-            },
-            {
-                "title": f"Phase 2: Applied Implementation & Systems Engineering in {target_role}",
-                "description": f"Build resilient, production-grade systems and workflows tailored to {target_role}.",
-                "completion_criteria": "Deliver an integrated multi-module project with automated testing and error handling.",
-                "topics": [
-                    {
-                        "title": f"Scalable Design Patterns, API Contracts & Concurrency in {target_role}",
-                        "description": "Asynchronous workflows, fault tolerance, bounded retries, and clean module boundaries.",
-                        "subtopics": [
-                            "Modular separation of concerns and interface contracts",
-                            "Asynchronous execution, queues, and concurrency control",
-                            "Idempotency, bounded retries, and graceful degradation",
-                            "Observability, structured logging, and telemetry",
-                        ],
-                        "prerequisites": ["Data Structures, State Modeling & Algorithmic Problem Solving"],
-                        "difficulty": "Intermediate",
-                        "estimated_hours": 14,
-                        "learning_objectives": [
-                            "Architect non-blocking workflows with backpressure and retry policies",
-                            "Design resilient contracts between services and storage layers",
-                        ],
-                        "practical_exercises": [
-                            "Build a resumable background job processor with retry states",
-                            "Simulate network faults and verify graceful error recovery",
-                        ],
-                        "project_checkpoint": f"Resilient {target_role} Service Layer",
-                        "completion_criteria": "Score >= 70% on the 20-question MCQ assessment.",
-                    },
-                    {
-                        "title": f"Verification, Security Hardening & Performance Tuning for {target_role}",
-                        "description": "Automated unit/integration testing, access control enforcement, and production optimization.",
-                        "subtopics": [
-                            "Unit, integration, and end-to-end verification strategies",
-                            "Authentication, authorization, and least-privilege security",
-                            "Profiling latency, memory usage, and query bottlenecks",
-                            f"Interview & examination readiness for {exam_goals or target_role}",
-                        ],
-                        "prerequisites": [f"Scalable Design Patterns, API Contracts & Concurrency in {target_role}"],
-                        "difficulty": "Advanced",
-                        "estimated_hours": 14,
-                        "learning_objectives": [
-                            "Write deterministic automated test suites covering edge cases",
-                            "Identify and remediate authorization and injection vulnerabilities",
-                        ],
-                        "practical_exercises": [
-                            "Create an automated regression and security test suite",
-                            "Complete a full capstone architecture review",
-                        ],
-                        "project_checkpoint": f"Production-Ready {target_role} Capstone",
-                        "completion_criteria": "Pass the final 20-MCQ examination and complete all phase checkpoints.",
-                    },
-                ],
-            },
-        ]
-
-    # Adjust hours/difficulty based on user skill_level and preferences
-    total_hours = 0
-    for p_idx, phase in enumerate(matched_phases, start=1):
-        phase["phase_order"] = p_idx
-        p_hours = 0
-        for t_idx, topic in enumerate(phase.get("topics", []), start=1):
-            topic["topic_order"] = t_idx
-            if preferred_stack and preferred_stack.lower() not in topic["title"].lower() and t_idx == 1:
-                topic["description"] = f"{topic['description']} Tailored for {preferred_stack}."
-            p_hours += int(topic.get("estimated_hours", 8))
-        phase["estimated_hours"] = p_hours
-        total_hours += p_hours
-
-    weeks_est = max(1, round(total_hours / max(1, hours_per_week)))
-    return {
-        "title": f"{target_role} Mastery Roadmap",
-        "target_role": target_role,
-        "description": (
-            f"A structured, editable AI-generated learning plan for {target_role} ({skill_level} level), "
-            f"designed for ~{hours_per_week} hrs/week (~{weeks_est} weeks total, {total_hours} study hours)."
-            + (f" Focused on {preferred_stack}." if preferred_stack else "")
-        ),
-        "skill_level": skill_level,
-        "hours_per_week": hours_per_week,
-        "preferred_stack": preferred_stack,
-        "total_estimated_hours": total_hours,
-        "phases": matched_phases,
-    }
+    return build_comprehensive_role_curriculum(
+        target_role=target_role,
+        skill_level=skill_level,
+        hours_per_week=hours_per_week,
+        preferred_stack=preferred_stack,
+        existing_knowledge=existing_knowledge,
+        priorities=priorities,
+        exam_goals=exam_goals,
+    )
 
 
 def validate_and_repair_roadmap(raw: Any, fallback_params: Dict[str, Any]) -> Dict[str, Any]:
@@ -799,7 +662,21 @@ def validate_and_repair_roadmap(raw: Any, fallback_params: Dict[str, Any]) -> Di
     if not repaired_phases:
         return _build_tailored_roadmap_fallback(**fallback_params)
 
-    return {
+    from backend.roadmap_curriculum import match_reading_materials_for_topic, validate_roadmap_curriculum
+
+    used_res: set = set()
+    for p in repaired_phases:
+        for t in p["topics"]:
+            if not t.get("reading_materials"):
+                t["reading_materials"] = match_reading_materials_for_topic(
+                    t["title"],
+                    t.get("description", ""),
+                    fallback_params["target_role"],
+                    used_resource_ids=used_res,
+                    limit=2,
+                )
+
+    result = {
         "title": str(raw.get("title") or f"{fallback_params['target_role']} Learning Roadmap").strip(),
         "target_role": fallback_params["target_role"],
         "description": str(raw.get("description") or f"Structured AI-generated curriculum for {fallback_params['target_role']}.").strip(),
@@ -809,6 +686,8 @@ def validate_and_repair_roadmap(raw: Any, fallback_params: Dict[str, Any]) -> Di
         "total_estimated_hours": total_hours,
         "phases": repaired_phases,
     }
+    result["curriculum_quality"] = validate_roadmap_curriculum(result)
+    return result
 
 
 def generateRoadmap(
@@ -865,6 +744,7 @@ def recommendTutorials(
     topic_description: str = "",
     target_role: str = "",
     user_prefs: Optional[Dict[str, Any]] = None,
+    exclude_video_ids: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     """
     Finds trustworthy, embeddable YouTube tutorials for the topic.
@@ -914,7 +794,8 @@ def recommendTutorials(
     if results:
         return results
 
-    # Score our verified educational catalog by keyword overlap
+    # Score our verified educational catalog by keyword overlap while avoiding duplicate generic reuse
+    excluded = exclude_video_ids or set()
     scored: List[Tuple[int, Dict[str, Any]]] = []
     for entry in VERIFIED_TUTORIAL_CATALOG:
         score = 0
@@ -925,6 +806,8 @@ def recommendTutorials(
                 for word in kw.split():
                     if len(word) >= 3 and word in search_text:
                         score += 1
+        if entry["video_id"] in excluded:
+            score -= 8
         scored.append((score, entry))
 
     scored.sort(key=lambda x: x[0], reverse=True)

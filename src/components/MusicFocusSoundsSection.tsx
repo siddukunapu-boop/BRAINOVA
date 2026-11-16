@@ -118,17 +118,7 @@ export const MusicFocusSoundsSection: React.FC = () => {
   const categoryTabs: Array<{ id: MusicCategoryFilter; label: string; count: number }> = [
     {
       id: 'all',
-      label: 'All Focus Sounds',
-      count: builtinTracks.length + uploadedTracks.length,
-    },
-    ...categories.map((c) => ({
-      id: c.id as MusicCategoryFilter,
-      label: c.name,
-      count: builtinTracks.filter((t) => t.category === c.id).length,
-    })),
-    {
-      id: 'uploaded',
-      label: 'My Uploads',
+      label: 'Personal Library',
       count: uploadedTracks.length,
     },
   ];
@@ -153,14 +143,14 @@ export const MusicFocusSoundsSection: React.FC = () => {
             <Headphones size={20} color="var(--accent-blue)" />
           </div>
           <div>
-            <div className="mfs-eyebrow">AMBIENT ACOUSTIC ENVIRONMENT</div>
+            <div className="mfs-eyebrow">PERSONAL AUDIO WORKSPACE</div>
             <h2 id="music-focus-sounds-heading" className="mfs-title">
               Music &amp; Focus Sounds
             </h2>
             <p className="mfs-subtitle">
-              Curated instrumental study tracks, deep concentration soundscapes, calibrated acoustic
-              noise, and natural ambience. Playback continues seamlessly while you navigate across
-              StudyOS and always remains off after a browser reload until you press Play.
+              Your private personal music library. Upload your own MP3, WAV, or OGG tracks, play
+              them across StudyOS navigation, or delete them anytime. Playback always remains off
+              after a fresh page reload until you press Play.
             </p>
           </div>
         </div>
@@ -393,14 +383,20 @@ export const MusicFocusSoundsSection: React.FC = () => {
                   <div className="mfs-track-title" data-testid={`music-track-title-${track.id}`}>
                     {track.title}
                   </div>
-                  <div className="mfs-track-desc">{track.subtitle}</div>
+                  <div className="mfs-track-desc">
+                    {track.original_filename ? `${track.original_filename} · ` : ''}
+                    {track.subtitle}
+                  </div>
                 </div>
 
                 <div className="mfs-track-footer">
                   <div className="mfs-track-duration">
                     {track.duration_seconds > 0
-                      ? `${formatTime(track.duration_seconds)} loop`
-                      : 'Custom audio'}
+                      ? formatTime(track.duration_seconds)
+                      : 'Audio'}
+                    {track.created_at
+                      ? ` · ${new Date(track.created_at).toLocaleDateString()}`
+                      : ''}
                   </div>
 
                   <div className="mfs-track-actions">

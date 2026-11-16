@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { apiRequest, getStoredToken, setStoredToken } from '../services/api';
+import { ApiError, apiRequest, getStoredToken, setStoredToken } from '../services/api';
+import { invalidateQueryCache } from '../lib/queryCache';
 
 export type BrainovaTheme =
   | 'midnight_luxe'
@@ -193,9 +194,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         document.body.removeAttribute('data-reduced-motion');
       }
-    } catch {
-      setStoredToken(null);
-      setUser(null);
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        setStoredToken(null);
+        setUser(null);
+        invalidateQueryCache();
+      }
     } finally {
       setLoadingAuth(false);
     }
@@ -223,6 +227,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     apiRequest('/api/auth/logout', { method: 'POST' }).catch(() => {});
     setStoredToken(null);
     setUser(null);
+    invalidateQueryCache();
     addToast('Signed out safely.', 'info');
   };
 

@@ -64,10 +64,13 @@ SYNC_TABLES: List[tuple[str, str]] = [
     ("mentor_rate_limits", "user_id,window_start_epoch"),
     ("ai_conversations", "id"),
     ("tech_pulse_sources", "id"),
+    ("tech_pulse_ingestion_runs", "id"),
     ("tech_pulse_stories", "id"),
     ("tech_pulse_daily_feed", "ist_date,story_id"),
     ("tech_pulse_bookmarks", "id"),
     ("user_music_tracks", "id"),
+    ("career_weekly_tasks", "id"),
+    ("topic_mastery_reviews", "id"),
 ]
 
 SYNC_TABLE_PK_MAP: Dict[str, str] = dict(SYNC_TABLES)

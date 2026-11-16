@@ -24,6 +24,7 @@ import { useApp, BRAINOVA_THEMES } from '../context/AppContext';
 import { FocusModalsOverlay, FocusStatusBar } from './FocusOverlayUI';
 import { BrainovaLogo } from './BrainovaLogo';
 import { apiRequest } from '../services/api';
+import { prefetchRoute, scheduleIdleRoutePrefetch } from '../lib/routePrefetch';
 
 interface SearchResultItem {
   type: string;
@@ -51,6 +52,10 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
     setShowSearchDropdown(false);
     setShowThemePopover(false);
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    return scheduleIdleRoutePrefetch();
+  }, []);
 
   useEffect(() => {
     if (!searchQuery.trim()) {
@@ -150,6 +155,8 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                   title={item.label}
                   style={{ '--nav-index': idx } as React.CSSProperties}
                   className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                  onMouseEnter={() => prefetchRoute(item.to)}
+                  onFocus={() => prefetchRoute(item.to)}
                   onClick={() => setMobileOpen(false)}
                 >
                   <Icon size={18} strokeWidth={2} style={{ flexShrink: 0 }} />
