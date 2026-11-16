@@ -1359,14 +1359,89 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  background: linear-gradient(160deg, rgba(22, 24, 31, 0.96) 0%, rgba(12, 13, 18, 0.98) 100%);
+  border: 1px solid rgba(214, 181, 109, 0.22);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
 }
 
 .cr-header-top {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 16px;
+}
+
+.cr-header-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cr-header-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.cr-metric-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cr-metric-pill strong {
+  color: var(--accent-gold, #d6b56d);
+}
+
+.cr-ring-wrap {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cr-ring-svg {
+  width: 64px;
+  height: 64px;
+  transform: rotate(-90deg);
+}
+
+.cr-ring-bg {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.09);
+  stroke-width: 5;
+}
+
+.cr-ring-fg {
+  fill: none;
+  stroke: var(--accent-gold, #d6b56d);
+  stroke-width: 5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cr-ring-label {
+  position: absolute;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.cr-chevron {
+  color: var(--accent-gold, #d6b56d);
+  margin-top: 2px;
+  flex-shrink: 0;
+  transition: transform 180ms ease;
 }
 
 .cr-role-eyebrow {
@@ -1498,14 +1573,19 @@
 
 .cr-category-card {
   border-radius: 14px;
-  background: var(--bg-surface, #111318);
+  background: linear-gradient(180deg, rgba(20, 22, 28, 0.94) 0%, rgba(14, 15, 20, 0.98) 100%);
   border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
   overflow: hidden;
-  transition: border-color 180ms ease;
+  transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.cr-category-card:hover {
+  border-color: rgba(214, 181, 109, 0.25);
 }
 
 .cr-category-card.is-expanded {
-  border-color: rgba(214, 181, 109, 0.34);
+  border-color: rgba(214, 181, 109, 0.38);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
 }
 
 .cr-category-header {

@@ -173,37 +173,51 @@ export const CareerRoadmapView: React.FC<CareerRoadmapViewProps> = ({
   const totalTopics = roadmap.total_topics ?? 0;
   const completedHours = roadmap.completed_hours ?? 0;
   const totalHours = roadmap.total_hours ?? 0;
+  const ringRadius = 24;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const ringOffset = ringCircumference - (overallPct / 100) * ringCircumference;
 
   return (
     <div className="cr-roadmap-root" data-testid="career-roadmap-view">
       {/* Header Summary Card */}
       <div className="card cr-header-card">
         <div className="cr-header-top">
-          <div>
+          <div className="cr-header-identity">
             <div className="cr-role-eyebrow">
-              <ShieldCheck size={14} />
+              <ShieldCheck size={13} />
               <span>
-                VERIFIED ROLE CURRICULUM · v{roadmap.curriculum_version}
+                VERIFIED CURRICULUM · v{roadmap.curriculum_version}
                 {isSwitchingRole ? ' · Synchronizing…' : ''}
               </span>
             </div>
             <h2 className="cr-role-title" data-testid="career-roadmap-role-title">
               {roadmap.role_title.toUpperCase()}
             </h2>
-            {roadmap.description && (
-              <p className="cr-role-desc">{roadmap.description}</p>
-            )}
-            {roadmap.authority_sources && roadmap.authority_sources.length > 0 && (
-              <p className="cr-authority-line">
-                References: {roadmap.authority_sources.join(' · ')}
-              </p>
-            )}
+            <div className="cr-header-metrics">
+              <span className="cr-metric-pill">
+                <strong>{completedTopics}</strong> / {totalTopics} mastered
+              </span>
+              <span className="cr-metric-pill">
+                <Clock size={12} />
+                ~{totalHours}h est. ({completedHours}h done)
+              </span>
+            </div>
           </div>
 
           <div className="cr-overall-stat" data-testid="career-roadmap-overall-progress">
-            <div className="cr-overall-pct">{overallPct}% completed</div>
-            <div className="cr-overall-sub">
-              {completedTopics} / {totalTopics} topics mastered · ~{totalHours}h estimated ({completedHours}h done)
+            <div className="cr-ring-wrap" aria-hidden="true">
+              <svg className="cr-ring-svg" viewBox="0 0 60 60">
+                <circle className="cr-ring-bg" cx="30" cy="30" r={ringRadius} />
+                <circle
+                  className="cr-ring-fg"
+                  cx="30"
+                  cy="30"
+                  r={ringRadius}
+                  strokeDasharray={ringCircumference}
+                  strokeDashoffset={ringOffset}
+                />
+              </svg>
+              <span className="cr-ring-label">{overallPct}%</span>
             </div>
           </div>
         </div>
@@ -285,7 +299,7 @@ export const CareerRoadmapView: React.FC<CareerRoadmapViewProps> = ({
                       className="cr-category-count"
                       data-testid={`cr-category-count-${cat.category_id}`}
                     >
-                      {cat.completed_count}/{cat.total_count} mastered
+                      {cat.completed_count}/{cat.total_count} mastered · {cat.progress_percent}%
                     </span>
                     <div className="cr-cat-bar-track" aria-hidden="true">
                       <div
@@ -293,7 +307,7 @@ export const CareerRoadmapView: React.FC<CareerRoadmapViewProps> = ({
                         style={{ width: `${cat.progress_percent}%` }}
                       />
                     </div>
-                    <span className="cr-chevron" aria-hidden="true">
+                    <span className={`cr-chevron ${expanded ? 'is-open' : ''}`} aria-hidden="true">
                       {expanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                     </span>
                   </div>

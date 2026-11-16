@@ -1451,6 +1451,7 @@ def sync_weekly_plan_with_roadmap(
     user_id: str,
     profile: Dict[str, Any],
     force_rebalance: bool = False,
+    preloaded_roadmap: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Synchronizes career_weekly_tasks with the user's active role-specific roadmap:
@@ -1463,7 +1464,7 @@ def sync_weekly_plan_with_roadmap(
 
     week_start = _current_week_start_iso()
     target_career = profile.get("target_career") or "Software Engineer"
-    roadmap = get_role_roadmap_with_progress(conn, user_id, target_career)
+    roadmap = preloaded_roadmap or get_role_roadmap_with_progress(conn, user_id, target_career)
 
     if not roadmap.get("verified"):
         rows = conn.execute(

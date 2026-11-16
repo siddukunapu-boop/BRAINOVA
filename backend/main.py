@@ -4362,8 +4362,11 @@ def get_career_launchpad_overview(
             },
             roadmap_stats={"overall_progress_percent": overall_progress},
         )
-        weekly_tasks = generate_adaptive_weekly_plan(
-            conn, uid, profile, analysis, preserve_existing=True
+        career_roadmap = get_role_roadmap_with_progress(
+            conn, uid, profile["target_career"]
+        )
+        weekly_tasks = sync_weekly_plan_with_roadmap(
+            conn, uid, profile, force_rebalance=False, preloaded_roadmap=career_roadmap
         )
         revision_rows = conn.execute(
             "SELECT * FROM topic_mastery_reviews WHERE user_id = ? ORDER BY next_review_at ASC LIMIT 20",
@@ -4380,10 +4383,6 @@ def get_career_launchpad_overview(
             if is_due:
                 due_revisions_count += 1
             revision_queue.append(rd)
-
-        career_roadmap = get_role_roadmap_with_progress(
-            conn, uid, profile["target_career"]
-        )
 
         return {
             "profile": profile,

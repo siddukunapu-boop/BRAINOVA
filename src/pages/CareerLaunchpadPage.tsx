@@ -579,10 +579,26 @@ export const CareerLaunchpadPage: React.FC = () => {
     return map;
   }, [overview]);
 
-  if (loading) {
+  if (loading && !overview) {
     return (
-      <div className="card" style={{ padding: '40px', textAlign: 'center' }}>
-        <p style={{ color: 'var(--text-secondary)' }}>Loading Career Launchpad…</p>
+      <div className="bnv-launchpad-page">
+        <section className="bnv-launchpad-hero">
+          <div className="bnv-launchpad-hero-copy">
+            <span className="bnv-launchpad-badge">
+              <Rocket size={13} />
+              <span>StudyOS Career Launchpad &amp; AI Mentor</span>
+            </span>
+            <h1>Internship &amp; Fresher Engineering Launchpad</h1>
+            <p>
+              Follow your role-specific Career Roadmap, synchronize weekly execution, and get AI mentorship.
+            </p>
+          </div>
+        </section>
+        <div className="card bnv-launchpad-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ height: '22px', width: '240px', borderRadius: '8px', background: 'rgba(255,255,255,0.06)' }} />
+          <div style={{ height: '64px', width: '100%', borderRadius: '10px', background: 'rgba(255,255,255,0.04)' }} />
+          <div style={{ height: '64px', width: '100%', borderRadius: '10px', background: 'rgba(255,255,255,0.04)' }} />
+        </div>
       </div>
     );
   }

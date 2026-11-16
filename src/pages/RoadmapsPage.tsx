@@ -383,33 +383,39 @@ export const RoadmapsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Role Catalog Category Tabs & Search */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
-            <button
-              type="button"
-              className={`btn btn-sm ${roleCategory === 'technical' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setRoleCategory('technical')}
-            >
-              Technical Careers ({roleCatalog.technical_roles.length})
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${roleCategory === 'non_technical' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setRoleCategory('non_technical')}
-            >
-              Non-Technical &amp; Civil Services ({roleCatalog.non_technical_roles.length})
-            </button>
+          {/* Role Catalog Category Segmented Bar & Search */}
+          <div className="rm-agent-toolbar">
+            <div className="rm-segmented" role="tablist" aria-label="Career role categories">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={roleCategory === 'technical'}
+                className={`rm-seg-btn ${roleCategory === 'technical' ? 'is-active' : ''}`}
+                onClick={() => setRoleCategory('technical')}
+              >
+                Technical Careers ({roleCatalog.technical_roles.length})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={roleCategory === 'non_technical'}
+                className={`rm-seg-btn ${roleCategory === 'non_technical' ? 'is-active' : ''}`}
+                onClick={() => setRoleCategory('non_technical')}
+              >
+                Non-Technical &amp; Civil Services ({roleCatalog.non_technical_roles.length})
+              </button>
+            </div>
             <input
               type="text"
-              className="form-input"
-              style={{ maxWidth: '240px', padding: '6px 10px', fontSize: '0.84rem' }}
-              placeholder="Filter roles..."
+              className="form-input rm-role-search"
+              placeholder="Search career roles..."
+              aria-label="Filter career roles"
               value={roleFilter}
               onChange={(e) => setRoleFilter(e.target.value)}
             />
           </div>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px', maxHeight: '140px', overflowY: 'auto' }}>
+          <div className="rm-role-grid" data-testid="rm-agent-role-grid">
             {(roleCategory === 'technical'
               ? roleCatalog.technical_roles
               : roleCatalog.non_technical_roles
@@ -417,18 +423,21 @@ export const RoadmapsPage: React.FC = () => {
               .filter((preset) =>
                 !roleFilter.trim() || preset.toLowerCase().includes(roleFilter.trim().toLowerCase())
               )
-              .map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  className={`btn btn-sm ${
-                    targetRole === preset ? 'btn-primary' : 'btn-secondary'
-                  }`}
-                  onClick={() => setTargetRole(preset)}
-                >
-                  {preset}
-                </button>
-              ))}
+              .map((preset) => {
+                const selected = targetRole === preset;
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    aria-pressed={selected}
+                    className={`rm-role-chip ${selected ? 'is-selected' : ''}`}
+                    onClick={() => setTargetRole(preset)}
+                  >
+                    <Compass size={14} className="rm-role-chip-icon" aria-hidden="true" />
+                    <span className="rm-role-chip-label">{preset}</span>
+                  </button>
+                );
+              })}
           </div>
 
           <div className="grid-3" style={{ marginBottom: '12px' }}>

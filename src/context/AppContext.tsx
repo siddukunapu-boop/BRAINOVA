@@ -210,6 +210,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [refreshUser]);
 
   const loginWithToken = (token: string, userData: UserProfile) => {
+    invalidateQueryCache();
     setStoredToken(token);
     setUser(userData);
     if (userData?.preferences?.theme) {
