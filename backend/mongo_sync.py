@@ -345,6 +345,9 @@ def install_changelog_triggers(conn: sqlite3.Connection) -> None:
                 f"BEGIN INSERT INTO _mongo_changelog(tbl, op, pk) VALUES ('{table_name}', 'D', {old_pk_expr}); END"
             )
 
+    # Commit trigger/temp-table setup so callers can execute `BEGIN IMMEDIATE` cleanly.
+    conn.commit()
+
 
 def apply_changelog_to_mongo(conn: sqlite3.Connection, db_path: str) -> int:
     """

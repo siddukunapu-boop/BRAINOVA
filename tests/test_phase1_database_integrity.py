@@ -501,6 +501,130 @@ class TestPhase1DatabaseIntegrity(unittest.TestCase):
             self.assertEqual(len(successes), 1)
             self.assertEqual(len(errors), 3)
 
+    def test_11_production_registration_otp_login_cold_start_full_lifecycle(self) -> None:
+        """
+        Regression test for POST /api/auth/register HTTP 500 (`BEGIN IMMEDIATE` inside
+        an implicit transaction opened by `install_changelog_triggers`):
+        Verifies registration -> OTP verification -> MongoDB persistence -> duplicate 409 ->
+        login 200 -> invalid password 401 -> unknown email 401 -> JWT /api/auth/me 200 ->
+        logout revocation 401 -> cold-start container wipe & login 200.
+        """
+        import types
+        from backend.main import (
+            SignupRequest,
+            VerifyEmailRequest,
+            get_me,
+            logout,
+            register_account,
+            verify_email_otp,
+        )
+
+        prod_tmp_db = os.path.join(self.tmp_dir, "reg_lifecycle", "aetherlearn.db")
+        captured: Dict[str, str] = {}
+
+        def _fake_send_otp(*, to_email: str, recipient_name: str, otp_code: str, expires_minutes: int):
+            _ = (to_email, recipient_name, expires_minutes)
+            captured["otp"] = otp_code
+            return types.SimpleNamespace(status="sent", provider="mock", message_id="m_1", correlation_id="c_1")
+
+        req = Request({"type": "http", "headers": [], "query_string": b"", "client": ("127.0.0.1", 9001)})
+
+        with patch.dict(
+            os.environ,
+            {
+                "STUDYOS_ENV": "production",
+                "VERCEL": "1",
+                "MONGODB_URI": "mongodb+srv://fake-test",
+                "AETHER_DB_PATH": prod_tmp_db,
+            },
+            clear=False,
+        ):
+            with patch.object(mongo_mod, "get_mongo_database", return_value=self.fake_db):
+                with patch("backend.otp_auth.send_verification_email", side_effect=_fake_send_otp):
+                    reg_res = register_account(
+                        SignupRequest(
+                            name="Dedicated Test User",
+                            email="dedicated_auth_test@example.com",
+                            password="StrongPassword123!",
+                            confirm_password="StrongPassword123!",
+                            target_role="Full Stack Developer",
+                        ),
+                        req,
+                    )
+                self.assertTrue(reg_res.get("pending_token"))
+                self.assertIn(reg_res["pending_token"], {
+                    d["pending_token"] for d in self.fake_db["pending_registrations"].docs.values()
+                })
+
+                ver_res = verify_email_otp(
+                    VerifyEmailRequest(
+                        pending_token=reg_res["pending_token"],
+                        otp_code=captured["otp"],
+                    )
+                )
+                uid = ver_res["user"]["id"]
+                self.assertIn(uid, self.fake_db["users"].docs)
+                self.assertEqual(self.fake_db["users"].docs[uid]["email"], "dedicated_auth_test@example.com")
+
+                # Duplicate email registration must return 409
+                with patch("backend.otp_auth.send_verification_email", side_effect=_fake_send_otp):
+                    with self.assertRaises(HTTPException) as ctx_dup:
+                        register_account(
+                            SignupRequest(
+                                name="Dup User",
+                                email="dedicated_auth_test@example.com",
+                                password="StrongPassword123!",
+                                confirm_password="StrongPassword123!",
+                                target_role="Full Stack Developer",
+                            ),
+                            req,
+                        )
+                    self.assertEqual(ctx_dup.exception.status_code, 409)
+
+                # Login succeeds with valid credentials
+                login_res = login(
+                    LoginRequest(email="dedicated_auth_test@example.com", password="StrongPassword123!"),
+                    req,
+                )
+                token = login_res["token"]
+                self.assertTrue(token)
+
+                # Protected endpoint works with valid JWT
+                curr = get_current_user(req, authorization=f"Bearer {token}")
+                me_res = get_me(curr)
+                self.assertEqual(me_res["user"]["email"], "dedicated_auth_test@example.com")
+
+                # Wrong password returns 401
+                with self.assertRaises(HTTPException) as ctx_bad_pw:
+                    login(LoginRequest(email="dedicated_auth_test@example.com", password="WrongPassword!"), req)
+                self.assertEqual(ctx_bad_pw.exception.status_code, 401)
+
+                # Unknown email returns 401
+                with self.assertRaises(HTTPException) as ctx_unknown:
+                    login(LoginRequest(email="unknown_user_999@example.com", password="StrongPassword123!"), req)
+                self.assertEqual(ctx_unknown.exception.status_code, 401)
+
+                # Logout revokes token
+                logout(token=token, current_user=curr)
+                with self.assertRaises(HTTPException) as ctx_revoked:
+                    get_current_user(req, authorization=f"Bearer {token}")
+                self.assertEqual(ctx_revoked.exception.status_code, 401)
+
+                # Cold-start container wipe of /tmp SQLite -> login still succeeds from MongoDB Atlas
+                for suffix in ("", "-wal", "-shm"):
+                    p = prod_tmp_db + suffix
+                    if os.path.exists(p):
+                        os.remove(p)
+                db_mod._INITIALIZED_SCHEMA_PATHS.clear()
+                mongo_mod.clear_cached_sync_seq()
+
+                cold_login_res = login(
+                    LoginRequest(email="dedicated_auth_test@example.com", password="StrongPassword123!"),
+                    req,
+                )
+                self.assertTrue(cold_login_res["token"])
+                self.assertEqual(cold_login_res["user"]["email"], "dedicated_auth_test@example.com")
+
 
 if __name__ == "__main__":
     unittest.main()

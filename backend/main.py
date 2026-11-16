@@ -551,11 +551,11 @@ def receive_email_provider_webhook(payload: Dict[str, Any], request: Request) ->
 
 
 @app.post("/api/auth/login")
-def login(req: LoginRequest, request: Request) -> Dict[str, Any]:
+def login(req: LoginRequest, request: Request = None) -> Dict[str, Any]:  # type: ignore[assignment]
     email_clean = (req.email or "").strip().lower()
     if not email_clean or not (req.password or "").strip():
         raise HTTPException(status_code=400, detail="Email and password are required.")
-    client_ip = request.client.host if request.client else ""
+    client_ip = request.client.host if (request is not None and request.client) else ""
     rate_key = f"login:{email_clean}:{client_ip or 'unknown'}"
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
