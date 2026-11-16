@@ -64,6 +64,11 @@ export interface UserPreferences {
   reduced_motion: boolean;
   theme?: BrainovaTheme;
   preferred_language?: string;
+  music_last_track_id?: string;
+  music_last_category?: string;
+  music_volume?: number;
+  music_playback_enabled?: boolean;
+  music_last_position?: number;
   credentials_status: CredentialsStatus;
   updated_at: string;
 }

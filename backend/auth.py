@@ -408,6 +408,11 @@ def sanitize_preferences_for_client(pref: Dict[str, Any]) -> Dict[str, Any]:
         "reduced_motion": bool(pref.get("reduced_motion", 0)),
         "theme": pref.get("theme") if pref.get("theme") in ("midnight_luxe", "obsidian_emerald", "midnight_sapphire", "onyx_burgundy") else "midnight_luxe",
         "preferred_language": pref.get("preferred_language") or "English",
+        "music_last_track_id": pref.get("music_last_track_id") or "builtin_study_gentle",
+        "music_last_category": pref.get("music_last_category") or "all",
+        "music_volume": float(pref["music_volume"]) if pref.get("music_volume") is not None else 0.65,
+        "music_playback_enabled": bool(pref.get("music_playback_enabled", 0)),
+        "music_last_position": float(pref.get("music_last_position") or 0.0),
         "credentials_status": {
             "gemini_configured": has_gemini,
             "openai_configured": has_openai,

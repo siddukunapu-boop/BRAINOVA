@@ -42,6 +42,7 @@ SYNC_TABLES: List[tuple[str, str]] = [
     ("tech_pulse_stories", "id"),
     ("tech_pulse_daily_feed", "ist_date,story_id"),
     ("tech_pulse_bookmarks", "id"),
+    ("user_music_tracks", "id"),
 ]
 
 _CLIENT_LOCK = threading.Lock()

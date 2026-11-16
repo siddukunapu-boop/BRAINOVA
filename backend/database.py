@@ -772,6 +772,22 @@ CREATE TABLE IF NOT EXISTS tech_pulse_locks (
     acquired_at_epoch INTEGER NOT NULL,
     expires_at_epoch INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_music_tracks (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    original_filename TEXT NOT NULL,
+    storage_filename TEXT NOT NULL,
+    file_format TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0,
+    category TEXT NOT NULL DEFAULT 'uploaded',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_music_tracks_user ON user_music_tracks(user_id, created_at DESC);
 """
 
 
@@ -813,6 +829,12 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "studio_outputs", "style_label", "TEXT NOT NULL DEFAULT ''")
     # Study journal: editable journal title (safe backward-compatible migration)
     _ensure_column(conn, "study_journal_entries", "title", "TEXT NOT NULL DEFAULT ''")
+    # Music & Focus Sounds user preferences (last track, category, volume, playback preference, position)
+    _ensure_column(conn, "user_preferences", "music_last_track_id", "TEXT NOT NULL DEFAULT 'builtin_study_gentle'")
+    _ensure_column(conn, "user_preferences", "music_last_category", "TEXT NOT NULL DEFAULT 'all'")
+    _ensure_column(conn, "user_preferences", "music_volume", "REAL NOT NULL DEFAULT 0.65")
+    _ensure_column(conn, "user_preferences", "music_playback_enabled", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "user_preferences", "music_last_position", "REAL NOT NULL DEFAULT 0")
 
     # Phase 1 Security: Migrate any legacy plaintext API credentials to AES-256-GCM at rest
     from backend.crypto import migrate_plaintext_credentials

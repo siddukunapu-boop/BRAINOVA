@@ -223,6 +223,11 @@ class PreferencesUpdateRequest(BaseModel):
     reduced_motion: Optional[bool] = None
     theme: Optional[str] = None
     preferred_language: Optional[str] = None
+    music_last_track_id: Optional[str] = None
+    music_last_category: Optional[str] = None
+    music_volume: Optional[float] = None
+    music_playback_enabled: Optional[bool] = None
+    music_last_position: Optional[float] = None
 
 
 class TutorialValidateRequest(BaseModel):
@@ -657,6 +662,16 @@ def update_preferences(
             updates["show_demo_data"] = 1 if req.show_demo_data else 0
         if req.reduced_motion is not None:
             updates["reduced_motion"] = 1 if req.reduced_motion else 0
+        if req.music_last_track_id is not None:
+            updates["music_last_track_id"] = req.music_last_track_id.strip()[:100] or "builtin_study_gentle"
+        if req.music_last_category is not None:
+            updates["music_last_category"] = req.music_last_category.strip()[:50] or "all"
+        if req.music_volume is not None:
+            updates["music_volume"] = max(0.0, min(1.0, float(req.music_volume)))
+        if req.music_playback_enabled is not None:
+            updates["music_playback_enabled"] = 1 if req.music_playback_enabled else 0
+        if req.music_last_position is not None:
+            updates["music_last_position"] = max(0.0, float(req.music_last_position))
 
         if updates:
             updates["updated_at"] = utc_now()
@@ -4857,6 +4872,161 @@ def tech_pulse_refresh(current_user: Dict[str, Any] = Depends(get_current_user))
     with get_db(commit=True) as conn:
         result = run_ingestion_cycle(conn, trigger_type="manual")
         return result
+
+
+# ============================================================================
+# SETTINGS → MUSIC & FOCUS SOUNDS MODULE
+# ============================================================================
+class MusicPreferencesUpdateRequest(BaseModel):
+    music_last_track_id: Optional[str] = None
+    music_last_category: Optional[str] = None
+    music_volume: Optional[float] = None
+    music_playback_enabled: Optional[bool] = None
+    music_last_position: Optional[float] = None
+
+
+@app.get("/api/music/tracks")
+def get_music_library(current_user: Dict[str, Any] = Depends(get_current_user)):
+    from backend.music_service import list_music_library_for_user
+
+    uid = current_user["id"]
+    with get_db(commit=False) as conn:
+        library = list_music_library_for_user(conn, uid)
+        pref = ensure_user_preferences(conn, uid)
+        clean_pref = sanitize_preferences_for_client(pref)
+        library["preferences"] = {
+            "music_last_track_id": clean_pref.get("music_last_track_id", "builtin_study_gentle"),
+            "music_last_category": clean_pref.get("music_last_category", "all"),
+            "music_volume": clean_pref.get("music_volume", 0.65),
+            "music_playback_enabled": clean_pref.get("music_playback_enabled", False),
+            "music_last_position": clean_pref.get("music_last_position", 0.0),
+        }
+        return library
+
+
+@app.get("/api/music/builtin/{track_id}/stream")
+def stream_builtin_music_track(
+    track_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import get_or_create_builtin_wav_path
+
+    _ = current_user
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "", track_id)
+    disk_path = get_or_create_builtin_wav_path(safe_id)
+    return FileResponse(
+        disk_path,
+        media_type="audio/wav",
+        filename=f"{safe_id}.wav",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@app.post("/api/music/upload")
+async def upload_user_music_track(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(default=None),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import save_uploaded_user_track
+
+    uid = current_user["id"]
+    raw_bytes = await file.read()
+    with get_db(commit=True) as conn:
+        track = save_uploaded_user_track(
+            conn=conn,
+            user_id=uid,
+            original_filename=file.filename or "",
+            raw_bytes=raw_bytes,
+            title=title,
+            content_type=file.content_type,
+        )
+    return {"track": track}
+
+
+@app.get("/api/music/tracks/{track_id}/stream")
+def stream_uploaded_music_track(
+    track_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import resolve_safe_user_track_path
+
+    uid = current_user["id"]
+    safe_tid = re.sub(r"[^a-zA-Z0-9_-]", "", track_id)
+    with get_db(commit=False) as conn:
+        row = conn.execute(
+            "SELECT * FROM user_music_tracks WHERE id = ?",
+            (safe_tid,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Uploaded audio track not found.")
+    if row["user_id"] != uid:
+        raise HTTPException(status_code=403, detail="You do not have permission to access this audio track.")
+
+    disk_path = resolve_safe_user_track_path(uid, row["storage_filename"])
+    if not os.path.isfile(disk_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Uploaded audio binary is no longer present on ephemeral storage. Please re-upload the track.",
+        )
+    return FileResponse(
+        disk_path,
+        media_type=row["mime_type"],
+        filename=row["original_filename"],
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.delete("/api/music/tracks/{track_id}")
+def remove_uploaded_music_track(
+    track_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import delete_uploaded_user_track
+
+    uid = current_user["id"]
+    safe_tid = re.sub(r"[^a-zA-Z0-9_-]", "", track_id)
+    with get_db(commit=True) as conn:
+        return delete_uploaded_user_track(conn, uid, safe_tid)
+
+
+@app.put("/api/music/preferences")
+def update_music_preferences(
+    req: MusicPreferencesUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        ensure_user_preferences(conn, uid)
+        updates: Dict[str, Any] = {}
+        if req.music_last_track_id is not None:
+            updates["music_last_track_id"] = req.music_last_track_id.strip()[:100] or "builtin_study_gentle"
+        if req.music_last_category is not None:
+            updates["music_last_category"] = req.music_last_category.strip()[:50] or "all"
+        if req.music_volume is not None:
+            updates["music_volume"] = max(0.0, min(1.0, float(req.music_volume)))
+        if req.music_playback_enabled is not None:
+            updates["music_playback_enabled"] = 1 if req.music_playback_enabled else 0
+        if req.music_last_position is not None:
+            updates["music_last_position"] = max(0.0, float(req.music_last_position))
+        if updates:
+            updates["updated_at"] = utc_now()
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            conn.execute(
+                f"UPDATE user_preferences SET {set_clause} WHERE user_id = ?",
+                [*updates.values(), uid],
+            )
+        new_pref = ensure_user_preferences(conn, uid)
+        clean_pref = sanitize_preferences_for_client(new_pref)
+    return {
+        "preferences": {
+            "music_last_track_id": clean_pref.get("music_last_track_id", "builtin_study_gentle"),
+            "music_last_category": clean_pref.get("music_last_category", "all"),
+            "music_volume": clean_pref.get("music_volume", 0.65),
+            "music_playback_enabled": clean_pref.get("music_playback_enabled", False),
+            "music_last_position": clean_pref.get("music_last_position", 0.0),
+        }
+    }
 
 
 @app.get("/api/health")

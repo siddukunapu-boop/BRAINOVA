@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppProvider, useApp } from './context/AppContext';
 import { FocusProvider } from './context/FocusContext';
+import { MusicPlayerProvider } from './context/MusicPlayerContext';
 import { AppShell } from './components/AppShell';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -58,33 +59,35 @@ const ProtectedRoutes: React.FC = () => {
 
   return (
     <FocusProvider>
-      <AppShell>
-        <RouteErrorBoundary>
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/roadmaps" element={<RoadmapsPage />} />
-          <Route path="/roadmaps/:roadmapId" element={<RoadmapDetailPage />} />
-          <Route path="/customized-roadmap" element={<CustomizedRoadmapPage />} />
-          <Route
-            path="/roadmaps/:roadmapId/topics/:topicId"
-            element={<TopicWorkspacePage />}
-          />
-          <Route path="/sources" element={<SourcesPage />} />
-          <Route path="/resources" element={<ResourcesPage />} />
-          <Route path="/diary" element={<DiaryPage />} />
-          <Route path="/study-journal" element={<StudyJournalPage />} />
-          <Route path="/focus" element={<FocusModePage />} />
-          <Route path="/career-launchpad" element={<CareerLaunchpadPage />} />
-          <Route path="/tech-pulse" element={<TechPulsePage />} />
-          <Route path="/quizzes" element={<QuizzesPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/analytics" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/auth" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
-        </RouteErrorBoundary>
-      </AppShell>
+      <MusicPlayerProvider>
+        <AppShell>
+          <RouteErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/roadmaps" element={<RoadmapsPage />} />
+            <Route path="/roadmaps/:roadmapId" element={<RoadmapDetailPage />} />
+            <Route path="/customized-roadmap" element={<CustomizedRoadmapPage />} />
+            <Route
+              path="/roadmaps/:roadmapId/topics/:topicId"
+              element={<TopicWorkspacePage />}
+            />
+            <Route path="/sources" element={<SourcesPage />} />
+            <Route path="/resources" element={<ResourcesPage />} />
+            <Route path="/diary" element={<DiaryPage />} />
+            <Route path="/study-journal" element={<StudyJournalPage />} />
+            <Route path="/focus" element={<FocusModePage />} />
+            <Route path="/career-launchpad" element={<CareerLaunchpadPage />} />
+            <Route path="/tech-pulse" element={<TechPulsePage />} />
+            <Route path="/quizzes" element={<QuizzesPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/analytics" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/auth" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+          </RouteErrorBoundary>
+        </AppShell>
+      </MusicPlayerProvider>
     </FocusProvider>
   );
 };

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Save, User, Sliders, Palette, Upload, Check } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp, BRAINOVA_THEMES, BrainovaTheme } from '../context/AppContext';
+import { MusicFocusSoundsSection } from '../components/MusicFocusSoundsSection';
 
 export const SettingsPage: React.FC = () => {
   const { user, theme, setTheme, refreshUser, addToast } = useApp();
@@ -359,6 +360,9 @@ export const SettingsPage: React.FC = () => {
         </div>
 
       </div>
+
+      {/* Final Subsection: Settings -> Music & Focus Sounds */}
+      <MusicFocusSoundsSection />
     </div>
   );
 };
