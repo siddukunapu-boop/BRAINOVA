@@ -17,7 +17,7 @@ const GOLD_SPARKS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 export function BrainovaLogo({
   size = 38,
   variant = 'sidebar',
-  alt = 'BRAINOVA Logo',
+  alt = 'StudyOS Logo',
 }: BrainovaLogoProps) {
   const [shouldAnimateEntrance] = useState(() => !initialEntranceCompleted);
 
@@ -53,7 +53,7 @@ export function BrainovaLogo({
         style={{ borderRadius: radius }}
       >
         <img
-          src="/brainova-logo.jpg"
+          src="/studyos-logo.png"
           alt={alt}
           className="brainova-logo-img"
           draggable={false}

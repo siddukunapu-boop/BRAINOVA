@@ -43,7 +43,7 @@ const ProtectedRoutes: React.FC = () => {
           color: 'var(--text-secondary)',
         }}
       >
-        Initializing BRAINOVA Workspace...
+        Initializing StudyOS Workspace...
       </div>
     );
   }

@@ -113,10 +113,10 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
             style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '11px' }}
             onClick={() => navigate('/dashboard')}
           >
-            <BrainovaLogo size={38} variant="sidebar" alt="BRAINOVA Logo" />
+            <BrainovaLogo size={38} variant="sidebar" alt="StudyOS Logo" />
             <div style={{ minWidth: 0 }}>
               <span className="brand-title brainova-brand-text" style={{ fontSize: '1.08rem', display: 'block', lineHeight: 1.15 }}>
-                BRAINOVA
+                StudyOS
               </span>
               <span
                 className="brand-subtitle"
@@ -138,7 +138,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
         </div>
 
         <nav className="sidebar-nav" aria-label="Main Navigation">
-          <div className="nav-section-label">BRAINOVA Platform</div>
+          <div className="nav-section-label">StudyOS Platform</div>
           {navItems.map((item, idx) => {
             const Icon = item.icon;
             const isSettings = item.to === '/settings';
@@ -241,10 +241,10 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
               className="topbar-brand"
               onClick={() => navigate('/dashboard')}
             >
-              <BrainovaLogo size={34} variant="topbar" alt="BRAINOVA" />
+              <BrainovaLogo size={34} variant="topbar" alt="StudyOS" />
               <div className="topbar-brand-text">
                 <span className="brainova-brand-text" style={{ fontSize: '1.02rem', lineHeight: 1.15 }}>
-                  BRAINOVA
+                  StudyOS
                 </span>
                 <span className="topbar-brand-tagline">
                   LEARN SMARTER. THINK BIGGER.
@@ -350,7 +350,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
                     }}
                   >
                     <span style={{ fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                      BRAINOVA Themes
+                      StudyOS Themes
                     </span>
                     <span className="badge badge-blue" style={{ fontSize: '0.68rem' }}>
                       4 Palettes

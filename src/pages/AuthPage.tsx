@@ -150,7 +150,7 @@ export const AuthPage: React.FC = () => {
         }),
       });
       loginWithToken(res.token, res.user);
-      addToast(`Welcome back to BRAINOVA, ${res.user.name}!`, 'success');
+      addToast(`Welcome back to StudyOS, ${res.user.name}!`, 'success');
       navigate('/dashboard');
     } catch (err: any) {
       setError(err.message || 'Authentication failed.');
@@ -181,7 +181,7 @@ export const AuthPage: React.FC = () => {
         window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       window.setTimeout(() => {
         loginWithToken(res.token, res.user);
-        addToast(`Welcome to BRAINOVA, ${res.user.name}!`, 'success');
+        addToast(`Welcome to StudyOS, ${res.user.name}!`, 'success');
         navigate('/dashboard');
       }, reducedMotion ? 100 : 900);
     } catch (err: any) {
@@ -240,8 +240,8 @@ export const AuthPage: React.FC = () => {
     <div className="auth-page-shell">
       <div className="auth-center-stack">
         <div className="auth-brand-header">
-          <BrainovaLogo size={42} variant="auth" alt="BRAINOVA Logo" />
-          <span className="auth-brand-wordmark">BRAINOVA</span>
+          <BrainovaLogo size={42} variant="auth" alt="StudyOS Logo" />
+          <span className="auth-brand-wordmark">StudyOS</span>
         </div>
 
         <div className="auth-card">
@@ -250,7 +250,7 @@ export const AuthPage: React.FC = () => {
               <div className="auth-success-emblem" aria-hidden="true">
                 <CheckCircle2 size={34} />
               </div>
-              <h2 className="auth-success-title">Welcome to BRAINOVA!</h2>
+              <h2 className="auth-success-title">Welcome to StudyOS!</h2>
               <p className="auth-success-subtitle">
                 Your email has been verified. Your learning journey starts now.
               </p>
@@ -264,12 +264,12 @@ export const AuthPage: React.FC = () => {
               <div className="otp-verify-header">
                 <span className="otp-kicker">
                   <ShieldCheck size={13} aria-hidden="true" />
-                  <span>BRAINOVA · Account Verification</span>
+                  <span>StudyOS · Account Verification</span>
                 </span>
                 <h1 className="auth-heading">Verify Your Email</h1>
                 <p className="auth-subheading" style={{ marginBottom: 0 }}>
                   We&apos;ve sent a secure verification code to your email address. Enter the
-                  six-digit code to activate your BRAINOVA account.
+                  six-digit code to activate your StudyOS account.
                 </p>
               </div>
 
@@ -381,7 +381,7 @@ export const AuthPage: React.FC = () => {
               </h1>
               <p className="auth-subheading">
                 {mode === 'signup'
-                  ? 'Enter your details to get started with BRAINOVA.'
+                  ? 'Enter your details to get started with StudyOS.'
                   : 'Sign in with your email and password to continue.'}
               </p>
 
