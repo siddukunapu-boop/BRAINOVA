@@ -562,7 +562,7 @@ def verify_pending_registration_otp(pending_token: str, otp_code: str) -> Dict[s
         conn.execute("DELETE FROM pending_registrations WHERE pending_token = ?", (token,))
 
         user_row = conn.execute(
-            "SELECT id, email, name, role, target_role, bio, avatar_color, email_verified, created_at, updated_at FROM users WHERE id = ?",
+            "SELECT id, email, name, role, target_role, bio, avatar_color, avatar_url, email_verified, created_at, updated_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
         user_row["preferences"] = sanitize_preferences_for_client(prefs)

@@ -138,9 +138,22 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_CORS_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+from backend.mongo_sync import DatabaseConfigurationError, DatabaseUnavailableError
+
+
+@app.exception_handler(DatabaseConfigurationError)
+@app.exception_handler(DatabaseUnavailableError)
+async def database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    _ = (request, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database service is temporarily unavailable. Please try again shortly."},
+    )
 
 
 @app.on_event("startup")
@@ -538,21 +551,66 @@ def receive_email_provider_webhook(payload: Dict[str, Any], request: Request) ->
 
 
 @app.post("/api/auth/login")
-def login(req: LoginRequest) -> Dict[str, Any]:
+def login(req: LoginRequest, request: Request) -> Dict[str, Any]:
     email_clean = (req.email or "").strip().lower()
     if not email_clean or not (req.password or "").strip():
         raise HTTPException(status_code=400, detail="Email and password are required.")
-    with get_db(commit=True) as conn:
-        row = conn.execute("SELECT * FROM users WHERE email = ?", (email_clean,)).fetchone()
-        if not row:
-            try:
-                from backend.mongo_sync import restore_user_by_email_from_mongo
+    client_ip = request.client.host if request.client else ""
+    rate_key = f"login:{email_clean}:{client_ip or 'unknown'}"
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
 
-                row = restore_user_by_email_from_mongo(conn, email_clean)
+    with get_db(commit=True) as conn:
+        rl_row = conn.execute(
+            "SELECT window_start, attempt_count FROM login_rate_limits WHERE rate_key = ?",
+            (rate_key,),
+        ).fetchone()
+        if rl_row:
+            try:
+                win_dt = datetime.fromisoformat(str(rl_row["window_start"]).replace("Z", "+00:00"))
+                if win_dt.tzinfo is None:
+                    win_dt = win_dt.replace(tzinfo=timezone.utc)
             except Exception:
-                pass
+                win_dt = now_dt
+            if (now_dt - win_dt) < timedelta(minutes=15) and int(rl_row["attempt_count"]) >= 15:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many failed login attempts. Please wait 15 minutes before trying again.",
+                )
+
+        row = conn.execute("SELECT * FROM users WHERE email = ?", (email_clean,)).fetchone()
         if not row or not verify_password(req.password, row["password_hash"]):
+            if rl_row:
+                try:
+                    win_dt = datetime.fromisoformat(str(rl_row["window_start"]).replace("Z", "+00:00"))
+                    if win_dt.tzinfo is None:
+                        win_dt = win_dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    win_dt = now_dt
+                if (now_dt - win_dt) < timedelta(minutes=15):
+                    conn.execute(
+                        "UPDATE login_rate_limits SET attempt_count = attempt_count + 1, updated_at = ? WHERE rate_key = ?",
+                        (now_iso, rate_key),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE login_rate_limits SET window_start = ?, attempt_count = 1, updated_at = ? WHERE rate_key = ?",
+                        (now_iso, now_iso, rate_key),
+                    )
+            else:
+                conn.execute(
+                    "INSERT INTO login_rate_limits (rate_key, window_start, attempt_count, updated_at) VALUES (?, ?, 1, ?)",
+                    (rate_key, now_iso, now_iso),
+                )
+            conn.commit()
+            from backend.database import get_db_path, is_mongo_authoritative
+            if is_mongo_authoritative():
+                from backend.mongo_sync import apply_changelog_to_mongo
+                apply_changelog_to_mongo(conn, get_db_path())
             raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+        if rl_row:
+            conn.execute("DELETE FROM login_rate_limits WHERE rate_key = ?", (rate_key,))
 
         prefs = ensure_user_preferences(conn, row["id"])
         user_data = {
@@ -563,6 +621,7 @@ def login(req: LoginRequest) -> Dict[str, Any]:
             "target_role": row["target_role"],
             "bio": row["bio"],
             "avatar_color": row["avatar_color"],
+            "avatar_url": row.get("avatar_url") or "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "preferences": sanitize_preferences_for_client(prefs),
@@ -597,7 +656,22 @@ def update_profile(
         target_role = req.target_role.strip() if req.target_role is not None else row["target_role"]
         bio = req.bio.strip() if req.bio is not None else row["bio"]
         avatar_color = req.avatar_color if req.avatar_color is not None else row["avatar_color"]
-        avatar_url = req.avatar_url if req.avatar_url is not None else (row.get("avatar_url") or "")
+        if req.avatar_url is not None:
+            cand_avatar = req.avatar_url.strip()
+            if len(cand_avatar) > 250_000:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Profile avatar image is too large. Please choose a smaller image.",
+                )
+            if cand_avatar and not (
+                cand_avatar.startswith("data:image/")
+                or cand_avatar.startswith("https://")
+                or cand_avatar.startswith("http://")
+            ):
+                raise HTTPException(status_code=400, detail="Invalid avatar image format.")
+            avatar_url = cand_avatar
+        else:
+            avatar_url = row.get("avatar_url") or ""
 
         conn.execute(
             """
@@ -5031,10 +5105,20 @@ def update_music_preferences(
 
 @app.get("/api/health")
 def health_check():
-    """Verify backend process and SQLite database connectivity without exposing internals."""
+    """Verify backend process and authoritative database connectivity without exposing internals."""
     try:
+        from backend.database import is_mongo_authoritative
+        from backend.mongo_sync import check_mongo_connection
+
         with get_db(commit=False) as conn:
             conn.execute("SELECT 1").fetchone()
+        if is_mongo_authoritative():
+            mongo_status = check_mongo_connection()
+            if not mongo_status.get("connected"):
+                return JSONResponse(
+                    status_code=503,
+                    content={"status": "unhealthy", "database": "unavailable"},
+                )
         return JSONResponse(
             status_code=200,
             content={"status": "ok", "database": "ok"},

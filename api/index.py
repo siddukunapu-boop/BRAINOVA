@@ -31,14 +31,14 @@ except Exception as _startup_exc:
     _startup_err_tb = traceback.format_exc()
     _fallback_app = FastAPI(title="BRAINOVA Startup Diagnostic")
 
-    @_fallback_app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    @_fallback_app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     def _startup_error_fallback(full_path: str):
+        _ = full_path
+        sys.stderr.write(f"[StudyOS Startup Error] {_startup_err_msg}\n{_startup_err_tb}\n")
         return JSONResponse(
-            status_code=500,
+            status_code=503,
             content={
-                "detail": f"Backend startup error: {_startup_err_msg}",
-                "path": full_path,
-                "traceback": _startup_err_tb.splitlines()[-8:],
+                "detail": "Service temporarily unavailable during startup.",
             },
         )
 

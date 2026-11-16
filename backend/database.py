@@ -85,60 +85,61 @@ def dict_factory(cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
 
 
 _VERCEL_INIT_PATHS = set()
+_INITIALIZED_SCHEMA_PATHS = set()
 
 
-def _trigger_mongo_sync(db_path: str) -> None:
-    if os.path.basename(db_path) != "aetherlearn.db":
-        return
-    try:
-        from backend.mongo_sync import get_mongodb_uri, sync_sqlite_to_mongo
-
-        if not get_mongodb_uri():
-            return
-
-        def _bg():
-            try:
-                bg_conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
-                bg_conn.row_factory = dict_factory
-                try:
-                    sync_sqlite_to_mongo(bg_conn)
-                finally:
-                    bg_conn.close()
-            except Exception:
-                pass
-
-        import threading
-
-        threading.Thread(target=_bg, daemon=True, name="brainova_mongo_sync").start()
-    except Exception:
-        pass
+def get_database_environment() -> str:
+    """Explicitly classify the active runtime environment: 'production', 'test', or 'development'."""
+    explicit = (os.environ.get("STUDYOS_ENV") or os.environ.get("BRAINOVA_ENV") or "").strip().lower()
+    if explicit in ("production", "test", "development"):
+        return explicit
+    db_path = get_db_path()
+    if os.path.basename(db_path) != "aetherlearn.db" or os.environ.get("PYTEST_CURRENT_TEST"):
+        return "test"
+    if os.environ.get("VERCEL") or os.environ.get("RENDER"):
+        return "production"
+    return "development"
 
 
-def _trigger_mongo_restore_bg(db_path: str) -> None:
-    if os.path.basename(db_path) != "aetherlearn.db":
-        return
-    try:
-        from backend.mongo_sync import get_mongodb_uri, restore_sqlite_from_mongo
+def is_mongo_authoritative(db_path: Optional[str] = None) -> bool:
+    """
+    Determine whether MongoDB Atlas is the authoritative database for this connection.
+    - Production (VERCEL / STUDYOS_ENV=production): MongoDB Atlas is ALWAYS authoritative.
+    - Test / Local Development: SQLite is authoritative unless STUDYOS_ENV=production is set.
+    """
+    if os.environ.get("BRAINOVA_DISABLE_MONGO_SYNC") == "1":
+        return False
+    target_path = db_path or get_db_path()
+    if os.path.basename(target_path) != "aetherlearn.db":
+        return False
+    env = get_database_environment()
+    if env == "production":
+        if os.environ.get("BRAINOVA_ALLOW_EPHEMERAL_SQLITE_FOR_TESTS") == "1":
+            return False
+        return True
+    return False
 
-        if not get_mongodb_uri():
-            return
 
-        def _bg_restore():
-            try:
-                bg_conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
-                bg_conn.row_factory = dict_factory
-                try:
-                    restore_sqlite_from_mongo(bg_conn)
-                finally:
-                    bg_conn.close()
-            except Exception:
-                pass
+def validate_database_configuration() -> Dict[str, Any]:
+    """
+    Validate database configuration for the current environment without leaking secrets.
+    In production, fails explicitly if MONGODB_URI is missing rather than silently falling back to /tmp SQLite.
+    """
+    env = get_database_environment()
+    db_path = get_db_path()
+    mongo_auth = is_mongo_authoritative(db_path)
+    from backend.mongo_sync import DatabaseConfigurationError, get_mongodb_uri
 
-        import threading
-
-        threading.Thread(target=_bg_restore, daemon=True, name="brainova_mongo_restore").start()
-    except Exception:
-        pass
+    uri_present = bool(get_mongodb_uri())
+    if env == "production" and not os.environ.get("BRAINOVA_ALLOW_EPHEMERAL_SQLITE_FOR_TESTS") and not uri_present:
+        raise DatabaseConfigurationError(
+            "Production database configuration is missing (MONGODB_URI). Ephemeral SQLite fallback is disabled."
+        )
+    return {
+        "environment": env,
+        "authoritative_db": "mongodb" if mongo_auth else "sqlite",
+        "mongodb_configured": uri_present,
+    }
 
 
 @contextmanager
@@ -147,24 +148,39 @@ def get_db(commit: bool = False):
     db_parent = os.path.dirname(db_path)
     if db_parent:
         os.makedirs(db_parent, exist_ok=True)
+    mongo_auth = is_mongo_authoritative(db_path)
+    if mongo_auth:
+        validate_database_configuration()
+
     conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
     conn.row_factory = dict_factory
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
-    if os.environ.get("VERCEL") and db_path not in _VERCEL_INIT_PATHS:
-        _VERCEL_INIT_PATHS.add(db_path)
+
+    if db_path not in _INITIALIZED_SCHEMA_PATHS:
         conn.executescript(SCHEMA_SQL)
         run_migrations(conn)
         conn.commit()
-        _trigger_mongo_restore_bg(db_path)
-    changes_before = conn.total_changes
+        _INITIALIZED_SCHEMA_PATHS.add(db_path)
+
+    if mongo_auth:
+        from backend.mongo_sync import (
+            apply_changelog_to_mongo,
+            hydrate_sqlite_from_mongo_authoritative,
+            install_changelog_triggers,
+        )
+
+        hydrate_sqlite_from_mongo_authoritative(conn, db_path)
+        if commit:
+            install_changelog_triggers(conn)
+
     try:
         yield conn
         if commit:
             conn.commit()
-            if conn.total_changes > changes_before:
-                _trigger_mongo_sync(db_path)
+            if mongo_auth:
+                apply_changelog_to_mongo(conn, db_path)
     except Exception:
         if commit:
             conn.rollback()
@@ -788,6 +804,19 @@ CREATE TABLE IF NOT EXISTS user_music_tracks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_music_tracks_user ON user_music_tracks(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS login_rate_limits (
+    rate_key TEXT PRIMARY KEY,
+    window_start TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
 """
 
 
@@ -798,14 +827,12 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
-def run_migrations(conn: sqlite3.Connection) -> None:
-    """Safely migrate existing SQLite tables without losing or altering existing user records."""
-    # Users profile image & email verification status (existing users default to verified = 1)
+def _migration_001_baseline_columns(conn: sqlite3.Connection) -> None:
+    """Ensure all backward-compatible columns exist across core tables without touching existing rows."""
     _ensure_column(conn, "users", "avatar_url", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "users", "email_verified", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(conn, "email_delivery_logs", "provider_message_id", "TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_email_delivery_msgid ON email_delivery_logs(provider_message_id)")
-    # User preferences: 4-theme selector and 6-language selector
     _ensure_column(conn, "user_preferences", "theme", "TEXT NOT NULL DEFAULT 'midnight_luxe'")
     conn.execute(
         """
@@ -816,38 +843,87 @@ def run_migrations(conn: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(conn, "user_preferences", "preferred_language", "TEXT NOT NULL DEFAULT 'English'")
-    # Topic readings: non-destructive CUSTOMIZED vs ORIGINAL reading storage
     _ensure_column(conn, "topic_readings", "diagrams_json", "TEXT NOT NULL DEFAULT '[]'")
     _ensure_column(conn, "topic_readings", "has_custom_reading", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "topic_readings", "custom_title", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "topic_readings", "custom_markdown", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "topic_readings", "custom_updated_at", "TEXT NOT NULL DEFAULT ''")
-    # Studio outputs: language metadata, playable video file path, duration, and style
     _ensure_column(conn, "studio_outputs", "language", "TEXT NOT NULL DEFAULT 'English'")
     _ensure_column(conn, "studio_outputs", "video_file_path", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "studio_outputs", "duration_label", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "studio_outputs", "style_label", "TEXT NOT NULL DEFAULT ''")
-    # Study journal: editable journal title (safe backward-compatible migration)
     _ensure_column(conn, "study_journal_entries", "title", "TEXT NOT NULL DEFAULT ''")
-    # Music & Focus Sounds user preferences (last track, category, volume, playback preference, position)
     _ensure_column(conn, "user_preferences", "music_last_track_id", "TEXT NOT NULL DEFAULT 'builtin_study_gentle'")
     _ensure_column(conn, "user_preferences", "music_last_category", "TEXT NOT NULL DEFAULT 'all'")
     _ensure_column(conn, "user_preferences", "music_volume", "REAL NOT NULL DEFAULT 0.65")
     _ensure_column(conn, "user_preferences", "music_playback_enabled", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "user_preferences", "music_last_position", "REAL NOT NULL DEFAULT 0")
 
-    # Phase 1 Security: Migrate any legacy plaintext API credentials to AES-256-GCM at rest
+
+def _migration_002_phase1_integrity_indexes(conn: sqlite3.Connection) -> None:
+    """Create targeted query & ownership indexes for Phase 1 data integrity."""
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_tutorials_user ON topic_tutorials(user_id, topic_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_topic_readings_user ON topic_readings(user_id, topic_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_reg_email ON pending_registrations(email)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_music_tracks_storage ON user_music_tracks(user_id, storage_filename)"
+    )
+
+
+def _migration_003_encrypt_credentials(conn: sqlite3.Connection) -> None:
+    """Migrate any legacy plaintext API credentials to AES-256-GCM at rest."""
     from backend.crypto import migrate_plaintext_credentials
+
     migrate_plaintext_credentials(conn)
+
+
+SCHEMA_MIGRATIONS = [
+    (1, "baseline_columns", _migration_001_baseline_columns),
+    (2, "phase1_integrity_indexes", _migration_002_phase1_integrity_indexes),
+    (3, "encrypt_legacy_credentials", _migration_003_encrypt_credentials),
+]
+
+
+def run_migrations(conn: sqlite3.Connection) -> None:
+    """
+    Execute versioned, ordered, idempotent schema migrations inside explicit transactions
+    and record completion in `schema_migrations`.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    applied_versions = {
+        int(row["version"] if isinstance(row, dict) else row[0])
+        for row in conn.execute("SELECT version FROM schema_migrations").fetchall()
+    }
+
+    for version, name, migration_fn in SCHEMA_MIGRATIONS:
+        if version in applied_versions:
+            continue
+        migration_fn(conn)
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            (version, name, utc_now()),
+        )
+
+    # Always run safe additive column/credential checks idempotently for pre-versioned DBs
+    _migration_001_baseline_columns(conn)
+    _migration_002_phase1_integrity_indexes(conn)
+    _migration_003_encrypt_credentials(conn)
 
 
 def init_db() -> None:
     db_path = get_db_path()
+    validate_database_configuration()
     with get_db(commit=True) as conn:
         conn.executescript(SCHEMA_SQL)
         run_migrations(conn)
-    if os.path.basename(db_path) == "aetherlearn.db" and not os.environ.get("VERCEL"):
-        _trigger_mongo_restore_bg(db_path)
 
 
 def log_activity(
