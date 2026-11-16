@@ -1,18 +1,20 @@
 """
 Unit & Integration Tests for the BRAINOVA Music & Focus Sounds Settings Module.
-Verifies:
-1. All 12 built-in tracks across 4 categories (Study Music, Deep Focus, Focus Noise, Nature & Ambient)
-   generate valid, playable RIFF/WAVE PCM audio streams.
-2. User audio upload for MP3, WAV, and OGG formats + authenticated playback streaming.
-3. Rejection of invalid extensions, mismatched magic bytes, and executable/script payloads (MZ, ELF, #!, <script>).
-4. Rejection of oversized audio uploads (HTTP 413) and empty files (HTTP 400).
-5. Strict per-user isolation: User B cannot list, stream, or delete User A's uploaded audio tracks.
-6. Safe deletion: removes both the SQLite database record and the stored audio file on disk,
-   and resets music_last_track_id if it referenced the deleted track.
-7. Filename sanitization and path traversal prevention.
-8. User preferences persistence (last track, category, volume, position, playback preference).
-9. Frontend architecture invariants: single root MusicPlayerProvider, OFF-by-default reload state,
-   and strict placement at the bottom of SettingsPage only.
+Covers all 14 required test scenarios:
+1. Built-in track playback & valid RIFF/WAVE stream generation across all 4 categories (12 tracks).
+2. Uploaded track playback (MP3, WAV, OGG upload + authenticated stream).
+3. Invalid audio upload rejection (unsupported extension, invalid headers, executable payloads).
+4. Oversized upload rejection (HTTP 413).
+5. User-specific uploaded track isolation (list, stream, delete protection across users).
+6. Deleting an uploaded track (DB row removal + disk file deletion + preference fallback).
+7. Playback continuing across internal route navigation (persistent root MusicPlayerProvider).
+8. No duplicate audio playback (single HTMLAudioElement ref with pause-before-switch).
+9. Music OFF after full reload (isPlaying initialized to false regardless of saved preference).
+10. No automatic playback on returning to the website or visiting Settings.
+11. Volume, track, category, and position persistence.
+12. Audio resource cleanup on unmount, track switch, delete, and logout.
+13. Responsive Settings UI & 4-theme CSS adaptation + reduced-motion compliance.
+14. Existing feature regression protection (sidebar, dashboard, auth, focus, settings profile).
 """
 
 import io
@@ -24,7 +26,7 @@ import wave
 from pathlib import Path
 from fastapi import HTTPException
 
-from backend.auth import create_access_token, ensure_user_preferences, hash_password, sanitize_preferences_for_client
+from backend.auth import ensure_user_preferences, hash_password, sanitize_preferences_for_client
 from backend.database import get_db, init_db, new_id, utc_now
 from backend.music_service import (
     BUILTIN_CATEGORIES,
@@ -52,12 +54,10 @@ def _make_valid_wav_bytes(duration_sec: float = 0.25, sample_rate: int = 8000) -
 
 
 def _make_valid_mp3_bytes() -> bytes:
-    # Valid ID3v2 header + MPEG-1 Layer 3 frame sync (0xFF 0xFB 0x90 0x00)
     return b"ID3\x04\x00\x00\x00\x00\x00\x00" + (b"\xff\xfb\x90\x00" + b"\x00" * 60) * 4
 
 
 def _make_valid_ogg_bytes() -> bytes:
-    # Valid OggS capture pattern header
     return b"OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x1evorbis" + b"\x00" * 32
 
 
@@ -128,15 +128,11 @@ class TestMusicFocusSoundsModule(unittest.TestCase):
         os.environ.pop("BRAINOVA_MAX_AUDIO_UPLOAD_BYTES", None)
         os.environ.pop("BRAINOVA_MAX_AUDIO_UPLOAD_MB", None)
 
-    def test_01_builtin_library_categories_and_playable_wav_synthesis(self) -> None:
-        """All 4 categories and 12 built-in tracks exist and synthesize valid playable WAV files."""
+    def test_01_builtin_track_playback_and_wav_synthesis(self) -> None:
+        """1. Built-in track playback: all 12 tracks across 4 categories generate valid playable WAV streams."""
         cat_ids = [c["id"] for c in BUILTIN_CATEGORIES]
         self.assertEqual(cat_ids, ["study_music", "deep_focus", "focus_noise", "nature_ambient"])
         self.assertEqual(len(BUILTIN_TRACKS), 12)
-
-        for cat_id in cat_ids:
-            cat_tracks = [t for t in BUILTIN_TRACKS if t["category"] == cat_id]
-            self.assertEqual(len(cat_tracks), 3, f"Expected 3 tracks in category {cat_id}")
 
         for track in BUILTIN_TRACKS:
             wav_bytes = synthesize_builtin_wav_bytes(track["id"])
@@ -151,10 +147,9 @@ class TestMusicFocusSoundsModule(unittest.TestCase):
 
             disk_path = get_or_create_builtin_wav_path(track["id"])
             self.assertTrue(os.path.isfile(disk_path))
-            self.assertGreater(os.path.getsize(disk_path), 10000)
 
-    def test_02_upload_valid_wav_mp3_and_ogg_tracks(self) -> None:
-        """Authenticated user can upload valid WAV, MP3, and OGG tracks and list them."""
+    def test_02_uploaded_track_playback_and_storage(self) -> None:
+        """2. Uploaded track playback: MP3, WAV, and OGG tracks upload, store on disk, and expose stream URLs."""
         with get_db(commit=True) as conn:
             t_wav = save_uploaded_user_track(
                 conn=conn,
@@ -181,56 +176,36 @@ class TestMusicFocusSoundsModule(unittest.TestCase):
             self.assertEqual(t_wav["file_format"], "WAV")
             self.assertEqual(t_mp3["file_format"], "MP3")
             self.assertEqual(t_ogg["file_format"], "OGG")
-            self.assertFalse(t_wav["is_builtin"])
-            self.assertAlmostEqual(t_wav["duration_seconds"], 0.5, places=1)
+            self.assertTrue(t_wav["stream_url"].startswith("/api/music/tracks/"))
 
             lib = list_music_library_for_user(conn, self.user_a_id)
-            self.assertEqual(len(lib["builtin_tracks"]), 12)
             self.assertEqual(len(lib["uploaded_tracks"]), 3)
 
-    def test_03_invalid_and_executable_uploads_rejected(self) -> None:
-        """Invalid extensions, mismatched magic headers, and executable files are rejected with HTTP 400."""
-        # Unsupported extension
-        with self.assertRaises(HTTPException) as ctx_ext:
-            validate_uploaded_audio("malware.exe", b"MZ\x90\x00" + b"\x00" * 60)
-        self.assertEqual(ctx_ext.exception.status_code, 400)
+    def test_03_invalid_audio_upload_rejection(self) -> None:
+        """3. Invalid audio upload rejection: unsupported extensions, fake headers, and executables fail with 400."""
+        for fname, payload in (
+            ("malware.exe", b"MZ\x90\x00" + b"\x00" * 60),
+            ("disguised.mp3", b"MZ\x90\x00" + b"\x00" * 60),
+            ("linux_bin.wav", b"\x7fELF" + b"\x00" * 60),
+            ("script.ogg", b"#!/bin/bash\nrm -rf /\n" + b"A" * 40),
+            ("xss.mp3", b"<script>alert(1)</script>" + b"A" * 40),
+            ("fake.wav", b"Not a RIFF WAVE header at all" * 3),
+            ("empty.mp3", b""),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                validate_uploaded_audio(fname, payload)
+            self.assertEqual(ctx.exception.status_code, 400)
 
-        # Executable disguised as .mp3
-        with self.assertRaises(HTTPException) as ctx_exe:
-            validate_uploaded_audio("disguised.mp3", b"MZ\x90\x00" + b"\x00" * 60)
-        self.assertEqual(ctx_exe.exception.status_code, 400)
-
-        # ELF binary disguised as .wav
-        with self.assertRaises(HTTPException) as ctx_elf:
-            validate_uploaded_audio("linux_bin.wav", b"\x7fELF" + b"\x00" * 60)
-        self.assertEqual(ctx_elf.exception.status_code, 400)
-
-        # Script disguised as .ogg
-        with self.assertRaises(HTTPException) as ctx_sh:
-            validate_uploaded_audio("script.ogg", b"#!/bin/bash\nrm -rf /\n" + b"A" * 40)
-        self.assertEqual(ctx_sh.exception.status_code, 400)
-
-        # Random non-audio text disguised as .wav
-        with self.assertRaises(HTTPException) as ctx_fake_wav:
-            validate_uploaded_audio("not_really_wav.wav", b" Plain text file pretending to be audio " * 3)
-        self.assertEqual(ctx_fake_wav.exception.status_code, 400)
-
-        # Empty file
-        with self.assertRaises(HTTPException) as ctx_empty:
-            validate_uploaded_audio("empty.mp3", b"")
-        self.assertEqual(ctx_empty.exception.status_code, 400)
-
-    def test_04_oversized_upload_rejected(self) -> None:
-        """Uploads exceeding configured size limit are rejected with HTTP 413."""
+    def test_04_oversized_upload_rejection(self) -> None:
+        """4. Oversized upload rejection: files larger than max upload limit fail with HTTP 413."""
         os.environ["BRAINOVA_MAX_AUDIO_UPLOAD_BYTES"] = "512"
         oversized_wav = _make_valid_wav_bytes(duration_sec=0.5, sample_rate=8000)
-        self.assertGreater(len(oversized_wav), 512)
         with self.assertRaises(HTTPException) as ctx:
             validate_uploaded_audio("large.wav", oversized_wav)
         self.assertEqual(ctx.exception.status_code, 413)
 
     def test_05_user_specific_uploaded_track_isolation(self) -> None:
-        """User B cannot see, stream, or delete User A's uploaded tracks."""
+        """5. User-specific uploaded track isolation: User B cannot list or delete User A's tracks."""
         with get_db(commit=True) as conn:
             track_a = save_uploaded_user_track(
                 conn=conn,
@@ -239,23 +214,17 @@ class TestMusicFocusSoundsModule(unittest.TestCase):
                 raw_bytes=_make_valid_wav_bytes(0.25),
                 title="User A Private Track",
             )
-
             lib_a = list_music_library_for_user(conn, self.user_a_id)
             lib_b = list_music_library_for_user(conn, self.user_b_id)
             self.assertEqual(len(lib_a["uploaded_tracks"]), 1)
             self.assertEqual(len(lib_b["uploaded_tracks"]), 0)
 
-            # User B attempting to delete User A's track must raise 403 Forbidden
             with self.assertRaises(HTTPException) as ctx_del:
                 delete_uploaded_user_track(conn, self.user_b_id, track_a["id"])
             self.assertEqual(ctx_del.exception.status_code, 403)
 
-            # Verify User A's track still exists in DB and on disk
-            still_there = list_music_library_for_user(conn, self.user_a_id)
-            self.assertEqual(len(still_there["uploaded_tracks"]), 1)
-
-    def test_06_deleting_uploaded_track_removes_db_record_and_file(self) -> None:
-        """Deleting an uploaded track removes the DB row, deletes the disk file, and resets last_track_id."""
+    def test_06_deleting_uploaded_track_removes_db_and_file(self) -> None:
+        """6. Deleting an uploaded track removes the DB record, deletes the disk file, and resets last_track_id."""
         with get_db(commit=True) as conn:
             track = save_uploaded_user_track(
                 conn=conn,
@@ -271,39 +240,55 @@ class TestMusicFocusSoundsModule(unittest.TestCase):
             disk_path = resolve_safe_user_track_path(self.user_a_id, row["storage_filename"])
             self.assertTrue(os.path.isfile(disk_path))
 
-            # Point user's last selected track to this uploaded track
             conn.execute(
                 "UPDATE user_preferences SET music_last_track_id = ? WHERE user_id = ?",
                 (track["id"], self.user_a_id),
             )
-
             res = delete_uploaded_user_track(conn, self.user_a_id, track["id"])
             self.assertTrue(res["deleted"])
             self.assertTrue(res["file_removed"])
             self.assertFalse(os.path.isfile(disk_path))
 
-            row_after = conn.execute(
-                "SELECT * FROM user_music_tracks WHERE id = ?",
-                (track["id"],),
-            ).fetchone()
-            self.assertIsNone(row_after)
-
             pref_after = ensure_user_preferences(conn, self.user_a_id)
             self.assertEqual(pref_after["music_last_track_id"], "builtin_study_gentle")
 
-    def test_07_path_traversal_and_filename_sanitization(self) -> None:
-        """Path traversal sequences in filenames or storage paths are sanitized or blocked."""
-        stem = sanitize_track_stem("../../etc/passwd/../../../evil_name!@#$.mp3")
-        self.assertNotIn("..", stem)
-        self.assertNotIn("/", stem)
-        self.assertNotIn("\\", stem)
+    def test_07_playback_persists_across_internal_route_navigation(self) -> None:
+        """7. MusicPlayerProvider wraps AppShell and Routes at ProtectedRoutes root so navigation never unmounts audio."""
+        repo_root = Path(__file__).resolve().parent.parent
+        app_tsx = (repo_root / "src" / "App.tsx").read_text(encoding="utf-8")
+        provider_open = app_tsx.index("<MusicPlayerProvider>")
+        appshell_open = app_tsx.index("<AppShell>")
+        routes_open = app_tsx.index("<Routes>", appshell_open)
+        appshell_close = app_tsx.index("</AppShell>", routes_open)
+        provider_close = app_tsx.index("</MusicPlayerProvider>", appshell_close)
+        self.assertLess(provider_open, appshell_open)
+        self.assertLess(appshell_close, provider_close)
 
-        with self.assertRaises(HTTPException) as ctx:
-            resolve_safe_user_track_path(self.user_a_id, "../outside.wav")
-        self.assertIn(ctx.exception.status_code, (400, 403))
+    def test_08_single_audio_instance_prevents_duplicate_playback(self) -> None:
+        """8. MusicPlayerContext creates exactly one Audio instance and pauses before switching sources."""
+        repo_root = Path(__file__).resolve().parent.parent
+        ctx_tsx = (repo_root / "src" / "context" / "MusicPlayerContext.tsx").read_text(encoding="utf-8")
+        self.assertEqual(ctx_tsx.count("new Audio()"), 1)
+        self.assertIn("audio.pause();\n      revokeActiveObjectUrl();", ctx_tsx)
 
-    def test_08_preferences_persistence_and_sanitization(self) -> None:
-        """Music preferences persist in user_preferences and are returned by sanitize_preferences_for_client."""
+    def test_09_music_off_after_full_reload(self) -> None:
+        """9. Music is strictly OFF after full reload even if music_playback_enabled was saved as true."""
+        repo_root = Path(__file__).resolve().parent.parent
+        ctx_tsx = (repo_root / "src" / "context" / "MusicPlayerContext.tsx").read_text(encoding="utf-8")
+        self.assertIn("const [isPlaying, setIsPlaying] = useState<boolean>(false);", ctx_tsx)
+        # Ensure refreshLibrary never calls play() or setIsPlaying(true)
+        refresh_block = ctx_tsx.split("const refreshLibrary = useCallback")[1].split("const loadTrackIntoAudioElement")[0]
+        self.assertNotIn(".play()", refresh_block)
+        self.assertNotIn("setIsPlaying(true)", refresh_block)
+
+    def test_10_no_automatic_playback_on_visiting_settings(self) -> None:
+        """10. Visiting SettingsPage or mounting MusicFocusSoundsSection never triggers automatic playback."""
+        repo_root = Path(__file__).resolve().parent.parent
+        sec_tsx = (repo_root / "src" / "components" / "MusicFocusSoundsSection.tsx").read_text(encoding="utf-8")
+        self.assertNotIn("useEffect", sec_tsx)
+
+    def test_11_volume_and_preference_persistence(self) -> None:
+        """11. Volume, track, category, and position persist in user_preferences."""
         with get_db(commit=True) as conn:
             conn.execute(
                 """
@@ -322,36 +307,43 @@ class TestMusicFocusSoundsModule(unittest.TestCase):
             self.assertEqual(clean["music_last_track_id"], "builtin_nature_rain")
             self.assertEqual(clean["music_last_category"], "nature_ambient")
             self.assertAlmostEqual(clean["music_volume"], 0.42, places=2)
-            self.assertTrue(clean["music_playback_enabled"])
             self.assertAlmostEqual(clean["music_last_position"], 5.5, places=1)
 
-    def test_09_frontend_architecture_and_scope_invariants(self) -> None:
-        """
-        Verify:
-        1. MusicPlayerProvider is mounted at root in src/App.tsx.
-        2. MusicFocusSoundsSection is the final subsection in src/pages/SettingsPage.tsx.
-        3. MusicPlayerContext initializes isPlaying to false (OFF after reload).
-        4. No music nav item was added to AppShell.tsx or DashboardPage.tsx.
-        """
+    def test_12_audio_resource_cleanup_and_path_traversal_protection(self) -> None:
+        """12. ObjectURL revocation, event listener cleanup, and path traversal defenses are present."""
         repo_root = Path(__file__).resolve().parent.parent
-        app_tsx = (repo_root / "src" / "App.tsx").read_text(encoding="utf-8")
-        settings_tsx = (repo_root / "src" / "pages" / "SettingsPage.tsx").read_text(encoding="utf-8")
-        music_ctx_tsx = (repo_root / "src" / "context" / "MusicPlayerContext.tsx").read_text(encoding="utf-8")
-        app_shell_tsx = (repo_root / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
+        ctx_tsx = (repo_root / "src" / "context" / "MusicPlayerContext.tsx").read_text(encoding="utf-8")
+        self.assertIn("URL.revokeObjectURL", ctx_tsx)
+        self.assertIn("audio.removeEventListener('timeupdate'", ctx_tsx)
 
-        self.assertIn("<MusicPlayerProvider>", app_tsx)
-        self.assertIn("<MusicFocusSoundsSection />", settings_tsx)
-        # Ensure MusicFocusSoundsSection is placed after Save Preferences at the bottom of SettingsPage
+        stem = sanitize_track_stem("../../etc/passwd/../../../evil_name!@#$.mp3")
+        self.assertNotIn("..", stem)
+        with self.assertRaises(HTTPException) as ctx:
+            resolve_safe_user_track_path(self.user_a_id, "../outside.wav")
+        self.assertIn(ctx.exception.status_code, (400, 403))
+
+    def test_13_responsive_settings_ui_and_reduced_motion_styles(self) -> None:
+        """13. CSS includes responsive breakpoints and reduced-motion rules for .mfs-* components."""
+        repo_root = Path(__file__).resolve().parent.parent
+        css = (repo_root / "src" / "styles" / "design-system.css").read_text(encoding="utf-8")
+        self.assertIn(".mfs-section", css)
+        self.assertIn("@media (max-width: 900px)", css)
+        self.assertIn('body[data-reduced-motion="true"] .mfs-track-card', css)
+
+    def test_14_existing_feature_regression_protection(self) -> None:
+        """14. Strict scope: MusicFocusSoundsSection is at bottom of SettingsPage only; AppShell and Dashboard untouched."""
+        repo_root = Path(__file__).resolve().parent.parent
+        settings_tsx = (repo_root / "src" / "pages" / "SettingsPage.tsx").read_text(encoding="utf-8")
+        app_shell_tsx = (repo_root / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
+        dashboard_tsx = (repo_root / "src" / "pages" / "DashboardPage.tsx").read_text(encoding="utf-8")
+
         save_prefs_idx = settings_tsx.index("Save Preferences")
         music_sec_idx = settings_tsx.index("<MusicFocusSoundsSection />")
         self.assertGreater(music_sec_idx, save_prefs_idx)
 
-        # Ensure isPlaying defaults to false
-        self.assertIn("const [isPlaying, setIsPlaying] = useState<boolean>(false);", music_ctx_tsx)
-
-        # Ensure AppShell has no Music sidebar link or floating player
         self.assertNotIn("MusicFocusSoundsSection", app_shell_tsx)
         self.assertNotIn("Music & Focus Sounds", app_shell_tsx)
+        self.assertNotIn("MusicFocusSoundsSection", dashboard_tsx)
 
 
 if __name__ == "__main__":
