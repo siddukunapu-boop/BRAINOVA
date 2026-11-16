@@ -164,7 +164,7 @@ interface OverviewPayload {
 }
 
 export const CareerLaunchpadPage: React.FC = () => {
-  const { user, addToast } = useApp();
+  const { user, addToast, refreshUser } = useApp();
   const navigate = useNavigate();
 
   const cachedOv = getCachedEntry<OverviewPayload>('/api/career-launchpad/overview');
@@ -396,6 +396,16 @@ export const CareerLaunchpadPage: React.FC = () => {
     loadData();
   }, [loadData]);
 
+  // Re-sync Career Launchpad if Primary Career Role changed in Settings
+  useEffect(() => {
+    const userRole = (user?.target_role || '').trim();
+    const activeRole = (overview?.profile?.target_career || '').trim();
+    if (userRole && activeRole && userRole.toLowerCase() !== activeRole.toLowerCase() && !savingProfile) {
+      invalidateQueryCache('/api/career-launchpad');
+      loadData(true);
+    }
+  }, [user?.target_role, overview?.profile?.target_career, savingProfile, loadData]);
+
   // Restore saved assessment draft from sessionStorage
   useEffect(() => {
     try {
@@ -452,6 +462,7 @@ export const CareerLaunchpadPage: React.FC = () => {
           : prev
       );
       addToast(`Career profile & roadmap synchronized to ${res.profile.target_career}.`, 'success');
+      refreshUser().catch(() => {});
       await loadData(true);
     } catch (err: any) {
       if (nextEpoch !== roleEpochRef.current) return;
@@ -718,7 +729,7 @@ export const CareerLaunchpadPage: React.FC = () => {
           <div className="bnv-form-grid">
               <div className="form-group">
                 <label className="form-label" htmlFor="lp-target-career">
-                  Target Career Track
+                  Primary Career Role
                 </label>
                 <select
                   id="lp-target-career"

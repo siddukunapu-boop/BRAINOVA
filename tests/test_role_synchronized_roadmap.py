@@ -155,3 +155,59 @@ class TestRoleSynchronizedCareerRoadmap(unittest.TestCase):
                 if t.get("role_key") == "quantum_computing_engineer" and t.get("status") == "pending"
             }
             self.assertNotIn(first_qc_tid, pending_qc_tids)
+
+    def test_05_settings_and_career_profile_single_source_of_truth_and_3_role_progress(self) -> None:
+        from backend.main import CareerProfileUpdateRequest, ProfileUpdateRequest, update_career_profile, update_profile
+
+        with get_db(commit=True) as conn:
+            u_a = conn.execute("SELECT * FROM users WHERE id = ?", (self.user_a_id,)).fetchone()
+            u_b = conn.execute("SELECT * FROM users WHERE id = ?", (self.user_b_id,)).fetchone()
+
+        # 1. Updating Primary Career Role in Settings updates career_profiles & weekly tasks
+        res_settings = update_profile(
+            ProfileUpdateRequest(target_role="Backend Developer"),
+            current_user=dict(u_a),
+        )
+        self.assertEqual(res_settings["user"]["target_role"], "Backend Developer")
+        with get_db() as conn:
+            cp_a = conn.execute("SELECT target_career FROM career_profiles WHERE user_id = ?", (self.user_a_id,)).fetchone()
+            self.assertEqual(cp_a["target_career"], "Backend Developer")
+
+        # 2. Updating Career Profile updates users.target_role & returns synced roadmap + weekly_tasks
+        res_cp = update_career_profile(
+            CareerProfileUpdateRequest(
+                target_career="Full Stack Developer",
+                target_job_role="Full Stack Engineer",
+                target_company="",
+                graduation_year=2026,
+                current_skill_level="Intermediate",
+                available_hours_per_week=10,
+                target_deadline="",
+            ),
+            current_user=dict(u_a),
+        )
+        self.assertEqual(res_cp["career_roadmap"]["role_key"], "full_stack_developer")
+        self.assertTrue(
+            all(
+                t["role_key"] == "full_stack_developer"
+                for t in res_cp["weekly_tasks"]
+                if not t.get("is_manual") and t.get("status") in ("pending", "rescheduled")
+            )
+        )
+        with get_db() as conn:
+            user_row = conn.execute("SELECT target_role FROM users WHERE id = ?", (self.user_a_id,)).fetchone()
+            self.assertEqual(user_row["target_role"], "Full Stack Developer")
+
+        # 3. 3-role progress preservation (Full Stack: 2, Backend: 2, Quantitative: 1) + User B isolated
+        with get_db(commit=True) as conn:
+            for tid in ("fs_cs_01", "fs_cs_02"):
+                toggle_roadmap_topic_completion(conn, self.user_a_id, "Full Stack Developer", tid, True, {"target_career": "Full Stack Developer", "available_hours_per_week": 10})
+            for tid in ("be_dsa", "be_oop"):
+                toggle_roadmap_topic_completion(conn, self.user_a_id, "Backend Developer", tid, True, {"target_career": "Backend Developer", "available_hours_per_week": 10})
+            toggle_roadmap_topic_completion(conn, self.user_a_id, "Quantitative Developer", "qd_la_calc", True, {"target_career": "Quantitative Developer", "available_hours_per_week": 10})
+
+            self.assertEqual(get_role_roadmap_with_progress(conn, self.user_a_id, "Full Stack Developer")["completed_topics"], 2)
+            self.assertEqual(get_role_roadmap_with_progress(conn, self.user_a_id, "Backend Developer")["completed_topics"], 2)
+            self.assertEqual(get_role_roadmap_with_progress(conn, self.user_a_id, "Quantitative Developer")["completed_topics"], 1)
+            self.assertEqual(get_role_roadmap_with_progress(conn, self.user_b_id, "Backend Developer")["completed_topics"], 0)
+            self.assertEqual(dict(u_b)["target_role"], "Full Stack Developer")

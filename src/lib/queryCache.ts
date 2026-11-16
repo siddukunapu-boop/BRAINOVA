@@ -68,6 +68,12 @@ onApiMutation((path) => {
   if (segments.length >= 2) {
     invalidateQueryCache(`/${segments[0]}/${segments[1]}`);
   }
+  if (clean.startsWith('/api/settings/profile')) {
+    invalidateQueryCache('/api/career-launchpad');
+  }
+  if (clean.startsWith('/api/career-launchpad/profile')) {
+    invalidateQueryCache('/api/settings');
+  }
   if (!clean.startsWith('/api/dashboard')) {
     invalidateQueryCache('/api/dashboard');
   }

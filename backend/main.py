@@ -681,13 +681,26 @@ def update_profile(
         else:
             avatar_url = row.get("avatar_url") or ""
 
+        now_iso = utc_now()
         conn.execute(
             """
             UPDATE users SET name = ?, target_role = ?, bio = ?, avatar_color = ?, avatar_url = ?, updated_at = ?
             WHERE id = ?
             """,
-            (name, target_role, bio, avatar_color, avatar_url, utc_now(), uid),
+            (name, target_role, bio, avatar_color, avatar_url, now_iso, uid),
         )
+        # Keep career_profiles.target_career & weekly schedule synchronized with users.target_role
+        if target_role:
+            _get_or_create_career_profile(conn, uid)
+            conn.execute(
+                "UPDATE career_profiles SET target_career = ?, updated_at = ? WHERE user_id = ?",
+                (target_role, now_iso, uid),
+            )
+            cp_row = dict(
+                conn.execute("SELECT * FROM career_profiles WHERE user_id = ?", (uid,)).fetchone()
+            )
+            sync_weekly_plan_with_roadmap(conn, uid, cp_row, force_rebalance=False)
+
         updated = conn.execute(
             "SELECT id, email, name, role, target_role, bio, avatar_color, avatar_url, created_at, updated_at FROM users WHERE id = ?",
             (uid,),
@@ -4546,12 +4559,16 @@ def update_career_profile(
                 uid,
             ),
         )
-        updated = dict(conn.execute("SELECT * FROM career_profiles WHERE user_id = ?", (uid,)).fetchone())
-        weekly_tasks = sync_weekly_plan_with_roadmap(
-            conn, uid, updated, force_rebalance=False
+        conn.execute(
+            "UPDATE users SET target_role = ?, updated_at = ? WHERE id = ?",
+            (req.target_career.strip(), now, uid),
         )
+        updated = dict(conn.execute("SELECT * FROM career_profiles WHERE user_id = ?", (uid,)).fetchone())
         career_roadmap = get_role_roadmap_with_progress(
             conn, uid, updated["target_career"]
+        )
+        weekly_tasks = sync_weekly_plan_with_roadmap(
+            conn, uid, updated, force_rebalance=False, preloaded_roadmap=career_roadmap
         )
     return {
         "profile": updated,
