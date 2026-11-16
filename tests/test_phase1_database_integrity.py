@@ -399,13 +399,13 @@ class TestPhase1DatabaseIntegrity(unittest.TestCase):
                     r["version"]
                     for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
                 ]
-                self.assertEqual(versions_1, [1, 2, 3, 4])
+                self.assertEqual(versions_1, [1, 2, 3, 4, 5])
                 db_mod.run_migrations(conn)
                 versions_2 = [
                     r["version"]
                     for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
                 ]
-                self.assertEqual(versions_2, [1, 2, 3, 4])
+                self.assertEqual(versions_2, [1, 2, 3, 4, 5])
 
     def test_08_login_rate_limiting_and_avatar_url_persistence(self) -> None:
         """Login returns avatar_url and enforces HTTP 429 rate limiting after repeated failed attempts."""

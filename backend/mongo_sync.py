@@ -71,6 +71,7 @@ SYNC_TABLES: List[tuple[str, str]] = [
     ("user_music_tracks", "id"),
     ("career_weekly_tasks", "id"),
     ("topic_mastery_reviews", "id"),
+    ("career_roadmap_topic_progress", "id"),
 ]
 
 SYNC_TABLE_PK_MAP: Dict[str, str] = dict(SYNC_TABLES)

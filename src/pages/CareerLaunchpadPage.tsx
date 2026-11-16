@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Activity,
   AlertCircle,
-  Award,
   BarChart3,
   Briefcase,
   CheckCircle2,
@@ -11,14 +10,14 @@ import {
   ExternalLink,
   Rocket,
   Save,
-  ShieldAlert,
   Sparkles,
   Target,
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
-import { deduplicatedGet, getCachedEntry } from '../lib/queryCache';
+import { deduplicatedGet, getCachedEntry, invalidateQueryCache } from '../lib/queryCache';
 import { useApp } from '../context/AppContext';
 import { CareerMentorPanel } from '../components/CareerMentorPanel';
+import { CareerRoadmapPayload, CareerRoadmapView } from '../components/CareerRoadmapView';
 import {
   dailyToWeeklyHours,
   validateDailyPrepHours,
@@ -98,6 +97,7 @@ interface OverviewPayload {
     };
   };
   weekly_performance: WeeklyPoint[];
+  career_roadmap?: CareerRoadmapPayload;
   readiness_intelligence?: {
     competency_dimensions: { category: string; label: string; current: number; target: number }[];
     prioritized_gaps: {
@@ -172,16 +172,12 @@ export const CareerLaunchpadPage: React.FC = () => {
   const [overview, setOverview] = useState<OverviewPayload | null>(cachedOv?.data || null);
   const [loading, setLoading] = useState(!cachedOv);
   const [error, setError] = useState('');
-  const [simBoosts, setSimBoosts] = useState<Record<string, number>>({});
-  const [simResult, setSimResult] = useState<{
-    baseline_indicator: number;
-    projected_indicator: number;
-    delta: number;
-    disclaimer: string;
-  } | null>(null);
   const [newRevTopic, setNewRevTopic] = useState('');
   const [newRevScore, setNewRevScore] = useState<number>(55);
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
+  const [pendingTopicIds, setPendingTopicIds] = useState<Record<string, boolean>>({});
+  const [isSwitchingRole, setIsSwitchingRole] = useState(false);
+  const roleEpochRef = useRef(0);
 
   // Profile form state
   const [profileForm, setProfileForm] = useState<CareerProfile>({
@@ -219,32 +215,105 @@ export const CareerLaunchpadPage: React.FC = () => {
       setLoading(true);
     }
     setError('');
+    const epochAtStart = roleEpochRef.current;
     try {
-      const [ov, assess] = await Promise.all([
-        deduplicatedGet<OverviewPayload>('/api/career-launchpad/overview', { force }),
-        deduplicatedGet<{ questions: AssessmentQuestion[] }>('/api/career-launchpad/assessment', { force }),
-      ]);
+      const ov = await deduplicatedGet<OverviewPayload>('/api/career-launchpad/overview', { force });
+      if (epochAtStart !== roleEpochRef.current) return;
       setOverview(ov);
       setProfileForm(ov.profile);
       setDailyHoursInput(String(weeklyToDailyHours(ov.profile?.available_hours_per_week)));
       setDailyHoursError('');
-      setQuestions(assess.questions || []);
     } catch (err: any) {
+      if (epochAtStart !== roleEpochRef.current) return;
       setError(err.message || 'Failed to load Career Launchpad.');
     } finally {
-      setLoading(false);
+      if (epochAtStart === roleEpochRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
-  const handleSimulateReadiness = async () => {
-    try {
-      const res = await apiRequest<any>('/api/career-launchpad/readiness/simulate', {
-        method: 'POST',
-        body: JSON.stringify({ boosts: simBoosts }),
+  useEffect(() => {
+    if (activeTab === 'assessment' && questions.length === 0) {
+      deduplicatedGet<{ questions: AssessmentQuestion[] }>('/api/career-launchpad/assessment')
+        .then((res) => setQuestions(res.questions || []))
+        .catch(() => {});
+    }
+  }, [activeTab, questions.length]);
+
+  const handleToggleRoadmapTopic = async (topicId: string, nextCompleted: boolean) => {
+    if (pendingTopicIds[topicId] || !overview?.career_roadmap) return;
+    const epochAtStart = roleEpochRef.current;
+    const activeRole = overview.profile.target_career;
+
+    setPendingTopicIds((prev) => ({ ...prev, [topicId]: true }));
+
+    // Optimistic UI update for instant feedback
+    setOverview((prev) => {
+      if (!prev?.career_roadmap?.categories) return prev;
+      let totalCompleted = 0;
+      let totalTopics = 0;
+      let completedHours = 0;
+      const nextCats = prev.career_roadmap.categories.map((cat) => {
+        let catCompleted = 0;
+        const nextTopics = cat.topics.map((t) => {
+          const isDone = t.topic_id === topicId ? nextCompleted : t.completed;
+          if (isDone) {
+            catCompleted += 1;
+            totalCompleted += 1;
+            completedHours += t.estimated_hours || 0;
+          }
+          totalTopics += 1;
+          return t.topic_id === topicId ? { ...t, completed: nextCompleted } : t;
+        });
+        const catTotal = nextTopics.length;
+        return {
+          ...cat,
+          completed_count: catCompleted,
+          progress_percent: catTotal > 0 ? Math.round((catCompleted / catTotal) * 100) : 0,
+          topics: nextTopics,
+        };
       });
-      setSimResult(res);
+      return {
+        ...prev,
+        career_roadmap: {
+          ...prev.career_roadmap,
+          completed_topics: totalCompleted,
+          completed_hours: completedHours,
+          overall_progress_percent: totalTopics > 0 ? Math.round((totalCompleted / totalTopics) * 100) : 0,
+          categories: nextCats,
+        },
+      };
+    });
+
+    try {
+      const res = await apiRequest<{
+        roadmap: CareerRoadmapPayload;
+        weekly_tasks: OverviewPayload['weekly_tasks'];
+      }>(`/api/career-launchpad/roadmap/topics/${encodeURIComponent(topicId)}/toggle`, {
+        method: 'POST',
+        body: JSON.stringify({ completed: nextCompleted, target_career: activeRole }),
+      });
+      if (epochAtStart !== roleEpochRef.current) return;
+      invalidateQueryCache('/api/career-launchpad');
+      setOverview((prev) =>
+        prev
+          ? {
+              ...prev,
+              career_roadmap: res.roadmap,
+              weekly_tasks: res.weekly_tasks,
+            }
+          : prev
+      );
     } catch (err: any) {
-      addToast(err.message || 'Simulation failed.', 'error');
+      addToast(err.message || 'Failed to update topic progress.', 'error');
+      await loadData(true);
+    } finally {
+      setPendingTopicIds((prev) => {
+        const next = { ...prev };
+        delete next[topicId];
+        return next;
+      });
     }
   };
 
@@ -253,12 +322,27 @@ export const CareerLaunchpadPage: React.FC = () => {
     payload: { status?: string; day_of_week?: string; actual_minutes?: number }
   ) => {
     setUpdatingTaskId(taskId);
+    const epochAtStart = roleEpochRef.current;
     try {
-      await apiRequest(`/api/career-launchpad/weekly-plan/tasks/${taskId}`, {
+      const res = await apiRequest<{
+        task: any;
+        career_roadmap?: CareerRoadmapPayload;
+        weekly_tasks?: OverviewPayload['weekly_tasks'];
+      }>(`/api/career-launchpad/weekly-plan/tasks/${taskId}`, {
         method: 'PATCH',
         body: JSON.stringify(payload),
       });
-      await loadData(true);
+      if (epochAtStart !== roleEpochRef.current) return;
+      invalidateQueryCache('/api/career-launchpad');
+      setOverview((prev) =>
+        prev
+          ? {
+              ...prev,
+              career_roadmap: res.career_roadmap ?? prev.career_roadmap,
+              weekly_tasks: res.weekly_tasks ?? prev.weekly_tasks,
+            }
+          : prev
+      );
     } catch (err: any) {
       addToast(err.message || 'Failed to update weekly task.', 'error');
     } finally {
@@ -340,6 +424,46 @@ export const CareerLaunchpadPage: React.FC = () => {
     });
   };
 
+  const syncRoleProfileUpdate = async (nextPayload: CareerProfile) => {
+    const nextEpoch = ++roleEpochRef.current;
+    setSavingProfile(true);
+    setIsSwitchingRole(true);
+    invalidateQueryCache('/api/career-launchpad');
+    try {
+      const res = await apiRequest<{
+        profile: CareerProfile;
+        career_roadmap?: CareerRoadmapPayload;
+        weekly_tasks?: OverviewPayload['weekly_tasks'];
+      }>('/api/career-launchpad/profile', {
+        method: 'PUT',
+        body: JSON.stringify(nextPayload),
+      });
+      if (nextEpoch !== roleEpochRef.current) return;
+      setProfileForm(res.profile);
+      setDailyHoursInput(String(weeklyToDailyHours(res.profile.available_hours_per_week)));
+      setOverview((prev) =>
+        prev
+          ? {
+              ...prev,
+              profile: res.profile,
+              career_roadmap: res.career_roadmap ?? prev.career_roadmap,
+              weekly_tasks: res.weekly_tasks ?? prev.weekly_tasks,
+            }
+          : prev
+      );
+      addToast(`Career profile & roadmap synchronized to ${res.profile.target_career}.`, 'success');
+      await loadData(true);
+    } catch (err: any) {
+      if (nextEpoch !== roleEpochRef.current) return;
+      addToast(err.message || 'Failed to save career profile.', 'error');
+    } finally {
+      if (nextEpoch === roleEpochRef.current) {
+        setSavingProfile(false);
+        setIsSwitchingRole(false);
+      }
+    }
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (savingProfile) return;
@@ -353,21 +477,7 @@ export const CareerLaunchpadPage: React.FC = () => {
       ...profileForm,
       available_hours_per_week: dailyToWeeklyHours(check.value),
     };
-    setSavingProfile(true);
-    try {
-      const res = await apiRequest<{ profile: CareerProfile }>('/api/career-launchpad/profile', {
-        method: 'PUT',
-        body: JSON.stringify(nextPayload),
-      });
-      setProfileForm(res.profile);
-      setDailyHoursInput(String(weeklyToDailyHours(res.profile.available_hours_per_week)));
-      addToast('Career profile saved.', 'success');
-      await loadData();
-    } catch (err: any) {
-      addToast(err.message || 'Failed to save career profile.', 'error');
-    } finally {
-      setSavingProfile(false);
-    }
+    await syncRoleProfileUpdate(nextPayload);
   };
 
   const handleSubmitAssessment = async (e: React.FormEvent) => {
@@ -557,7 +667,7 @@ export const CareerLaunchpadPage: React.FC = () => {
           onClick={() => setActiveTab('gaps')}
         >
           <BarChart3 size={15} />
-          <span>Gap Analysis &amp; Readiness</span>
+          <span>Career Roadmap</span>
         </button>
         <button
           type="button"
@@ -855,229 +965,17 @@ export const CareerLaunchpadPage: React.FC = () => {
         </form>
       )}
 
-      {/* TAB 3: SKILL GAP ANALYSIS & JOB READINESS */}
+      {/* TAB 3: COMPLETE ROLE-SPECIFIC CAREER ROADMAP */}
       {activeTab === 'gaps' && (
-        <div className="bnv-launchpad-grid">
-          <div className="card bnv-launchpad-card">
-            <h2 className="bnv-section-title">
-              Skill Gap Analysis ({overview.gap_analysis.target_career})
-            </h2>
-            <p className="bnv-section-sub">
-              {overview.gap_analysis.has_assessment
-                ? 'Comparing your demonstrated assessment scores against target-role benchmarks.'
-                : 'No assessment submitted yet. Complete the Skill Assessment to replace unassessed placeholders with real scores.'}
-            </p>
-
-            <div className="bnv-gap-list">
-              {overview.gap_analysis.gap_items.map((item) => (
-                <div key={item.category} className="bnv-gap-row">
-                  <div className="bnv-gap-row-head">
-                    <span>{item.label}</span>
-                    <span className={`bnv-gap-status bnv-gap-status--${item.status}`}>
-                      {item.current === null
-                        ? `Unassessed · Target ${item.target}%`
-                        : `${item.current}% / ${item.target}% target`}
-                    </span>
-                  </div>
-                  <div className="bnv-gap-bar-track">
-                    <div
-                      className="bnv-gap-bar-target"
-                      style={{ left: `${item.target}%` }}
-                      title={`Target benchmark: ${item.target}%`}
-                    />
-                    <div
-                      className="bnv-gap-bar-current"
-                      style={{ width: `${item.current ?? 0}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card bnv-launchpad-card">
-            <h2 className="bnv-section-title">
-              <Award size={18} style={{ verticalAlign: 'text-bottom', marginRight: 6 }} />
-              Job Readiness Indicator
-            </h2>
-            <div className="bnv-readiness-hero">
-              <span className="bnv-readiness-big">{readiness.overall_indicator}%</span>
-              <span className="bnv-readiness-caption">Evidence-Based Preparation Score</span>
-            </div>
-
-            <div className="bnv-summary-list">
-              <div className="bnv-summary-item">
-                <span>Assessment Coverage</span>
-                <strong>{readiness.assessment_coverage_percent}%</strong>
-              </div>
-              <div className="bnv-summary-item">
-                <span>Demonstrated Skill Avg</span>
-                <strong>{readiness.demonstrated_skill_percent}%</strong>
-              </div>
-              <div className="bnv-summary-item">
-                <span>Project Evidence</span>
-                <strong>{readiness.project_evidence_percent}%</strong>
-              </div>
-              <div className="bnv-summary-item">
-                <span>Interview / Quiz Practice</span>
-                <strong>{readiness.interview_practice_percent}%</strong>
-              </div>
-              <div className="bnv-summary-item">
-                <span>Roadmap Progress</span>
-                <strong>{readiness.roadmap_progress_percent}%</strong>
-              </div>
-            </div>
-
-            {overview.gap_analysis.recommended_actions.length > 0 && (
-              <div className="bnv-rec-box">
-                <h4>Recommended Next Actions</h4>
-                <ul>
-                  {overview.gap_analysis.recommended_actions.map((act, i) => (
-                    <li key={i}>{act}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <div className="bnv-disclaimer-box">
-              <ShieldAlert size={16} />
-              <span>{readiness.disclaimer}</span>
-            </div>
-          </div>
-
-          {/* Career Readiness Intelligence: Competency Radar, Prioritized Tiers, Evidence & Simulator */}
-          {overview.readiness_intelligence && (
-            <div className="card bnv-launchpad-card" style={{ gridColumn: '1 / -1' }}>
-              <h2 className="bnv-section-title">Career Readiness Intelligence</h2>
-              <p className="bnv-section-sub">
-                Prioritized skill gaps, evidence-based mastery explanations, and deterministic readiness projection.
-              </p>
-
-              <div className="grid-2" style={{ gap: '18px', marginTop: '12px' }}>
-                {/* Prioritized Skill Gaps & Evidence */}
-                <div>
-                  <h3 style={{ fontSize: '0.98rem', marginBottom: '10px' }}>
-                    Prioritized Skill Gaps &amp; Mastery Evidence
-                  </h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {overview.readiness_intelligence.prioritized_gaps.slice(0, 6).map((pg) => {
-                      const ev = overview.readiness_intelligence?.evidence_breakdown.find(
-                        (e) => e.category === pg.category
-                      );
-                      return (
-                        <div
-                          key={pg.category}
-                          style={{
-                            padding: '10px 12px',
-                            borderRadius: '10px',
-                            background: 'var(--bg-charcoal)',
-                            border: '1px solid var(--border-subtle)',
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                            <strong>{pg.label}</strong>
-                            <span className="badge badge-indigo" style={{ textTransform: 'uppercase', fontSize: '0.72rem' }}>
-                              {pg.tier} · ~{pg.estimated_hours_to_improve}h
-                            </span>
-                          </div>
-                          {ev && (
-                            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                              <strong>{ev.verdict}:</strong> {ev.reason}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Readiness Simulator & Top 3 Next Actions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <div
-                    style={{
-                      padding: '14px',
-                      borderRadius: '12px',
-                      background: 'var(--bg-charcoal)',
-                      border: '1px solid var(--border-subtle)',
-                    }}
-                  >
-                    <h3 style={{ fontSize: '0.98rem', marginBottom: '6px' }}>
-                      Readiness Simulator (Projection Only)
-                    </h3>
-                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '10px' }}>
-                      Explore how improving your top 3 gap skills affects your readiness indicator.
-                    </p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '10px' }}>
-                      {overview.readiness_intelligence.prioritized_gaps.slice(0, 3).map((pg) => (
-                        <div key={pg.category} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '0.84rem' }}>
-                          <span>{pg.label} (+pts)</span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={50}
-                            className="form-input"
-                            style={{ width: '80px', padding: '4px 8px' }}
-                            value={simBoosts[pg.category] ?? 15}
-                            onChange={(e) =>
-                              setSimBoosts((prev) => ({
-                                ...prev,
-                                [pg.category]: Math.max(0, Math.min(50, Number(e.target.value) || 0)),
-                              }))
-                            }
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={handleSimulateReadiness}
-                    >
-                      Simulate Readiness Projection
-                    </button>
-                    {simResult && (
-                      <div style={{ marginTop: '10px', fontSize: '0.84rem', color: 'var(--text-primary)' }}>
-                        <strong>
-                          Projected Readiness: {simResult.baseline_indicator}% → {simResult.projected_indicator}% (
-                          {simResult.delta >= 0 ? `+${simResult.delta}` : simResult.delta}%)
-                        </strong>
-                        <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                          {simResult.disclaimer}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <h3 style={{ fontSize: '0.98rem', marginBottom: '8px' }}>Top 3 Actionable Next Steps</h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {overview.readiness_intelligence.top_next_actions.map((act, idx) => (
-                        <div
-                          key={idx}
-                          style={{
-                            padding: '10px 12px',
-                            borderRadius: '10px',
-                            background: 'var(--bg-charcoal)',
-                            border: '1px solid var(--border-subtle)',
-                            fontSize: '0.82rem',
-                          }}
-                        >
-                          <strong>{idx + 1}. {act.title} ({act.expected_hours}h)</strong>
-                          <p style={{ color: 'var(--text-secondary)', marginTop: '3px' }}>
-                            Study: {act.what_to_study} · Practice: {act.what_to_practice}
-                          </p>
-                          <p style={{ color: 'var(--text-muted)', marginTop: '2px' }}>
-                            Success metric: {act.success_metric}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <CareerRoadmapView
+          roadmap={overview.career_roadmap}
+          pendingTopicIds={pendingTopicIds}
+          isSwitchingRole={isSwitchingRole}
+          onToggleTopic={handleToggleRoadmapTopic}
+          onSelectSupportedRole={(role) =>
+            syncRoleProfileUpdate({ ...profileForm, target_career: role })
+          }
+        />
       )}
 
       {/* TAB 4: PERSONALIZED PREPARATION PLAN & WEEKLY PERFORMANCE */}
@@ -1209,7 +1107,7 @@ export const CareerLaunchpadPage: React.FC = () => {
               <div>
                 <h2 className="bnv-section-title">Adaptive Weekly Execution Planner</h2>
                 <p className="bnv-section-sub">
-                  Calibrated to your {overview.profile.available_hours_per_week} hrs/week availability and priority skill gaps.
+                  Calibrated to your {overview.profile.available_hours_per_week} hrs/week availability and {overview.profile.target_career} roadmap.
                 </p>
               </div>
               <button
@@ -1245,7 +1143,7 @@ export const CareerLaunchpadPage: React.FC = () => {
                         <span className="badge badge-indigo">{task.day_of_week}</span>
                         <strong>{task.topic}</strong>
                         <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                          {task.activity_type} · {task.priority} · {task.planned_minutes}m planned ({task.actual_minutes}m logged)
+                          {task.skill_category} · {task.priority} · {task.planned_minutes}m planned ({task.actual_minutes}m logged) · {task.status}
                         </span>
                       </div>
                       <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '4px' }}>

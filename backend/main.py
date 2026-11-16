@@ -69,10 +69,13 @@ from backend.career_launchpad import (
     generate_adaptive_weekly_plan,
     generate_mentor_image,
     get_public_assessment_questions,
+    get_role_roadmap_with_progress,
     grade_skill_assessment,
     record_spaced_repetition_attempt,
     simulate_readiness_projection,
     stream_mentor_reply,
+    sync_weekly_plan_with_roadmap,
+    toggle_roadmap_topic_completion,
     update_weekly_task_and_rebalance,
 )
 from backend.database import (
@@ -4378,6 +4381,10 @@ def get_career_launchpad_overview(
                 due_revisions_count += 1
             revision_queue.append(rd)
 
+        career_roadmap = get_role_roadmap_with_progress(
+            conn, uid, profile["target_career"]
+        )
+
         return {
             "profile": profile,
             "careers": list(CAREER_BENCHMARKS.keys()),
@@ -4385,6 +4392,7 @@ def get_career_launchpad_overview(
             "latest_assessment": parsed_latest,
             "gap_analysis": analysis,
             "readiness_intelligence": readiness_intelligence,
+            "career_roadmap": career_roadmap,
             "weekly_tasks": weekly_tasks,
             "revision_queue": revision_queue,
             "due_revisions_count": due_revisions_count,
@@ -4474,7 +4482,14 @@ def update_career_weekly_task(
         )
         if not updated:
             raise HTTPException(status_code=404, detail="Weekly task not found.")
-        return {"task": updated}
+        profile = _get_or_create_career_profile(conn, uid)
+        weekly_tasks = sync_weekly_plan_with_roadmap(conn, uid, profile, force_rebalance=False)
+        career_roadmap = get_role_roadmap_with_progress(conn, uid, profile["target_career"])
+        return {
+            "task": updated,
+            "career_roadmap": career_roadmap,
+            "weekly_tasks": weekly_tasks,
+        }
 
 
 @app.post("/api/career-launchpad/revisions/record")
@@ -4533,7 +4548,59 @@ def update_career_profile(
             ),
         )
         updated = dict(conn.execute("SELECT * FROM career_profiles WHERE user_id = ?", (uid,)).fetchone())
-    return {"profile": updated}
+        weekly_tasks = sync_weekly_plan_with_roadmap(
+            conn, uid, updated, force_rebalance=False
+        )
+        career_roadmap = get_role_roadmap_with_progress(
+            conn, uid, updated["target_career"]
+        )
+    return {
+        "profile": updated,
+        "career_roadmap": career_roadmap,
+        "weekly_tasks": weekly_tasks,
+    }
+
+
+@app.get("/api/career-launchpad/roadmap")
+def get_career_launchpad_roadmap(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    with get_db() as conn:
+        profile = _get_or_create_career_profile(conn, uid)
+        return {
+            "profile": profile,
+            "career_roadmap": get_role_roadmap_with_progress(
+                conn, uid, profile["target_career"]
+            ),
+        }
+
+
+@app.post("/api/career-launchpad/roadmap/topics/{topic_id}/toggle")
+def toggle_career_roadmap_topic(
+    topic_id: str,
+    payload: Dict[str, Any],
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    uid = current_user["id"]
+    completed = bool(payload.get("completed", True))
+    with get_db(commit=True) as conn:
+        profile = _get_or_create_career_profile(conn, uid)
+        target_career = str(payload.get("target_career") or profile["target_career"]).strip()
+        result = toggle_roadmap_topic_completion(
+            conn,
+            user_id=uid,
+            target_career=target_career,
+            topic_id=topic_id,
+            completed=completed,
+            profile=profile,
+        )
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Topic '{topic_id}' was not found in the verified curriculum for '{target_career}'.",
+            )
+        return result
 
 
 @app.get("/api/career-launchpad/assessment")

@@ -69,6 +69,26 @@ CAREER_BENCHMARKS: Dict[str, Dict[str, int]] = {
         "programming": 92, "dsa": 92, "oop": 85, "dbms": 75, "os": 85,
         "networks": 75, "web_dev": 50, "git": 80, "projects": 85,
     },
+    "Quantum Computing Engineer": {
+        "programming": 88, "dsa": 85, "oop": 75, "dbms": 55, "os": 70,
+        "networks": 60, "web_dev": 45, "git": 80, "projects": 90,
+    },
+    "AI/ML Engineer": {
+        "programming": 88, "dsa": 80, "oop": 75, "dbms": 75, "os": 70,
+        "networks": 60, "web_dev": 60, "git": 80, "projects": 90,
+    },
+    "DevOps Engineer": {
+        "programming": 75, "dsa": 65, "oop": 65, "dbms": 72, "os": 90,
+        "networks": 90, "web_dev": 65, "git": 88, "projects": 85,
+    },
+    "IAS": {
+        "programming": 40, "dsa": 40, "oop": 40, "dbms": 45, "os": 45,
+        "networks": 45, "web_dev": 40, "git": 40, "projects": 85,
+    },
+    "IPS": {
+        "programming": 40, "dsa": 40, "oop": 40, "dbms": 45, "os": 45,
+        "networks": 50, "web_dev": 40, "git": 40, "projects": 85,
+    },
     "Custom": {
         "programming": 75, "dsa": 75, "oop": 75, "dbms": 75, "os": 70,
         "networks": 70, "web_dev": 75, "git": 75, "projects": 80,
@@ -1334,6 +1354,360 @@ def _current_week_start_iso() -> str:
     return monday.strftime("%Y-%m-%d")
 
 
+def get_role_roadmap_with_progress(
+    conn: Any,
+    user_id: str,
+    target_career: str,
+) -> Dict[str, Any]:
+    """
+    Single source of truth for the user's role-specific career roadmap.
+    Combines the verified curriculum registry with persistent per-user, per-role topic completion.
+    """
+    from backend.career_roadmap_registry import get_verified_curriculum
+
+    curriculum = get_verified_curriculum(target_career)
+    if not curriculum.get("verified"):
+        return curriculum
+
+    role_key = curriculum["role_key"]
+    version = curriculum["curriculum_version"]
+
+    rows = conn.execute(
+        """
+        SELECT topic_id, completed, completed_at
+        FROM career_roadmap_topic_progress
+        WHERE user_id = ? AND role_key = ? AND curriculum_version = ?
+        """,
+        (user_id, role_key, version),
+    ).fetchall()
+    progress_map: Dict[str, Dict[str, Any]] = {
+        r["topic_id"]: {"completed": bool(r["completed"]), "completed_at": r["completed_at"] or ""}
+        for r in rows
+    }
+
+    enriched_categories: List[Dict[str, Any]] = []
+    total_topics = 0
+    completed_topics = 0
+    total_hours = 0
+    completed_hours = 0
+
+    for cat in curriculum["categories"]:
+        cat_topics: List[Dict[str, Any]] = []
+        cat_completed = 0
+        for t in cat.get("topics") or []:
+            tid = t["topic_id"]
+            prog = progress_map.get(tid) or {"completed": False, "completed_at": ""}
+            is_done = bool(prog["completed"])
+            hrs = int(t.get("estimated_hours") or 4)
+            total_topics += 1
+            total_hours += hrs
+            if is_done:
+                cat_completed += 1
+                completed_topics += 1
+                completed_hours += hrs
+            cat_topics.append(
+                {
+                    **t,
+                    "category_id": cat["category_id"],
+                    "category_title": cat["title"],
+                    "completed": is_done,
+                    "completed_at": prog["completed_at"],
+                }
+            )
+        cat_total = len(cat_topics)
+        cat_pct = round((cat_completed / cat_total) * 100) if cat_total > 0 else 0
+        enriched_categories.append(
+            {
+                "category_id": cat["category_id"],
+                "title": cat["title"],
+                "description": cat.get("description") or "",
+                "completed_count": cat_completed,
+                "total_count": cat_total,
+                "progress_percent": cat_pct,
+                "topics": cat_topics,
+            }
+        )
+
+    overall_pct = round((completed_topics / total_topics) * 100) if total_topics > 0 else 0
+    return {
+        "verified": True,
+        "role_key": role_key,
+        "role_title": curriculum["role_title"],
+        "description": curriculum.get("description") or "",
+        "curriculum_version": version,
+        "authority_sources": curriculum["authority_sources"],
+        "coverage_audit": curriculum["coverage_audit"],
+        "completed_topics": completed_topics,
+        "total_topics": total_topics,
+        "overall_progress_percent": overall_pct,
+        "completed_hours": completed_hours,
+        "total_hours": total_hours,
+        "categories": enriched_categories,
+    }
+
+
+def sync_weekly_plan_with_roadmap(
+    conn: Any,
+    user_id: str,
+    profile: Dict[str, Any],
+    force_rebalance: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Synchronizes career_weekly_tasks with the user's active role-specific roadmap:
+    - Removes non-manual pending/rescheduled tasks from old roles
+    - Marks/removes pending tasks whose roadmap topic is now completed
+    - Preserves manually adjusted tasks (is_manual=1) and completed tasks
+    - Schedules incomplete prerequisite-satisfied topics within available_hours_per_week
+    """
+    from backend.database import new_id, utc_now
+
+    week_start = _current_week_start_iso()
+    target_career = profile.get("target_career") or "Software Engineer"
+    roadmap = get_role_roadmap_with_progress(conn, user_id, target_career)
+
+    if not roadmap.get("verified"):
+        rows = conn.execute(
+            "SELECT * FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? ORDER BY created_at ASC",
+            (user_id, week_start),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    role_key = roadmap["role_key"]
+    version = roadmap["curriculum_version"]
+
+    # Remove non-manual pending/rescheduled tasks from other career roles
+    conn.execute(
+        """
+        DELETE FROM career_weekly_tasks
+        WHERE user_id = ? AND week_start_date = ?
+          AND COALESCE(is_manual, 0) = 0
+          AND source_type = 'planner'
+          AND status IN ('pending', 'rescheduled')
+          AND role_key != ?
+        """,
+        (user_id, week_start, role_key),
+    )
+
+    if force_rebalance:
+        conn.execute(
+            """
+            DELETE FROM career_weekly_tasks
+            WHERE user_id = ? AND week_start_date = ?
+              AND COALESCE(is_manual, 0) = 0
+              AND source_type = 'planner'
+              AND status = 'pending'
+            """,
+            (user_id, week_start),
+        )
+
+    # Flatten topics and track completed topic_ids
+    all_topics: List[Dict[str, Any]] = []
+    completed_ids = set()
+    for cat in roadmap["categories"]:
+        for t in cat["topics"]:
+            all_topics.append(t)
+            if t["completed"]:
+                completed_ids.add(t["topic_id"])
+
+    # Remove non-manual pending tasks for topics already completed in the roadmap
+    existing_rows = conn.execute(
+        "SELECT * FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? ORDER BY created_at ASC",
+        (user_id, week_start),
+    ).fetchall()
+    for er in existing_rows:
+        tid = er["topic_id"] or ""
+        if (
+            tid
+            and tid in completed_ids
+            and er["role_key"] == role_key
+            and er["status"] in ("pending", "rescheduled")
+            and not er["is_manual"]
+        ):
+            conn.execute(
+                "DELETE FROM career_weekly_tasks WHERE id = ? AND user_id = ?",
+                (er["id"], user_id),
+            )
+
+    current_rows = conn.execute(
+        "SELECT * FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? ORDER BY created_at ASC",
+        (user_id, week_start),
+    ).fetchall()
+
+    already_scheduled_topic_ids = {
+        r["topic_id"] for r in current_rows if r.get("topic_id") and r.get("role_key") == role_key
+    }
+    planned_mins_used = sum(
+        int(r["planned_minutes"] or 0)
+        for r in current_rows
+        if r.get("status") in ("pending", "rescheduled")
+    )
+
+    hours_per_week = max(2, min(60, int(profile.get("available_hours_per_week") or 10)))
+    total_budget_minutes = hours_per_week * 60
+
+    # If user reduced available_hours_per_week, trim excess non-manual pending tasks
+    if planned_mins_used > total_budget_minutes:
+        trimmable = [
+            r
+            for r in reversed(current_rows)
+            if r.get("status") in ("pending", "rescheduled") and not r.get("is_manual")
+        ]
+        for tr in trimmable:
+            if planned_mins_used <= total_budget_minutes:
+                break
+            conn.execute(
+                "DELETE FROM career_weekly_tasks WHERE id = ? AND user_id = ?",
+                (tr["id"], user_id),
+            )
+            planned_mins_used -= int(tr["planned_minutes"] or 0)
+        current_rows = conn.execute(
+            "SELECT * FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? ORDER BY created_at ASC",
+            (user_id, week_start),
+        ).fetchall()
+        already_scheduled_topic_ids = {
+            r["topic_id"] for r in current_rows if r.get("topic_id") and r.get("role_key") == role_key
+        }
+
+    remaining_budget = max(0, total_budget_minutes - planned_mins_used)
+
+    if remaining_budget >= 45:
+        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        day_loads = {d: 0 for d in days}
+        for r in current_rows:
+            if r.get("day_of_week") in day_loads and r.get("status") in ("pending", "rescheduled"):
+                day_loads[r["day_of_week"]] += int(r["planned_minutes"] or 0)
+
+        # Eligible incomplete topics whose prerequisites are satisfied
+        eligible: List[Dict[str, Any]] = []
+        scheduled_or_done = set(completed_ids) | set(already_scheduled_topic_ids)
+        for t in all_topics:
+            if t["completed"] or t["topic_id"] in already_scheduled_topic_ids:
+                continue
+            prereqs = t.get("prerequisites") or []
+            if all(p in scheduled_or_done for p in prereqs):
+                eligible.append(t)
+                scheduled_or_done.add(t["topic_id"])
+
+        now = utc_now()
+        max_daily_mins = max(60, (total_budget_minutes // 5) + 30)
+        for t in eligible:
+            if remaining_budget < 30:
+                break
+            est_mins = min(120, max(45, int(t.get("estimated_hours") or 4) * 15), remaining_budget)
+            # Pick lightest day that won't overload
+            target_day = min(days, key=lambda d: day_loads[d])
+            if day_loads[target_day] + est_mins > max_daily_mins and len(current_rows) > 0:
+                # Spread realistically instead of overloading one day
+                break
+            day_loads[target_day] += est_mins
+            remaining_budget -= est_mins
+
+            prio = "critical" if t["difficulty"] == "Beginner" else ("high" if t["difficulty"] == "Intermediate" else "normal")
+            wtask_id = new_id("wtask")
+            conn.execute(
+                """
+                INSERT INTO career_weekly_tasks (
+                    id, user_id, week_start_date, day_of_week, topic, skill_category,
+                    learning_objective, activity_type, planned_minutes, actual_minutes,
+                    priority, completion_criteria, status, source_type,
+                    role_key, curriculum_version, category_id, topic_id, is_manual,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'learning', ?, 0, ?, ?, 'pending', 'planner', ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    wtask_id,
+                    user_id,
+                    week_start,
+                    target_day,
+                    t["title"],
+                    t["category_title"],
+                    t.get("learning_objective") or f"Master {t['title']}",
+                    est_mins,
+                    prio,
+                    f"Complete {t['title']} in your {roadmap['role_title']} roadmap.",
+                    role_key,
+                    version,
+                    t["category_id"],
+                    t["topic_id"],
+                    now,
+                    now,
+                ),
+            )
+
+    final_rows = conn.execute(
+        "SELECT * FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? ORDER BY created_at ASC",
+        (user_id, week_start),
+    ).fetchall()
+    return [dict(r) for r in final_rows]
+
+
+def toggle_roadmap_topic_completion(
+    conn: Any,
+    user_id: str,
+    target_career: str,
+    topic_id: str,
+    completed: bool,
+    profile: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Persist per-user, per-role topic completion using stable topic_id and immediately
+    synchronize the Prep Plan & Weekly Schedule.
+    """
+    from backend.career_roadmap_registry import get_verified_curriculum
+    from backend.database import new_id, utc_now
+
+    curriculum = get_verified_curriculum(target_career)
+    if not curriculum.get("verified"):
+        return None
+
+    role_key = curriculum["role_key"]
+    version = curriculum["curriculum_version"]
+
+    matched_cat_id = None
+    for cat in curriculum["categories"]:
+        for t in cat.get("topics") or []:
+            if t["topic_id"] == topic_id:
+                matched_cat_id = cat["category_id"]
+                break
+        if matched_cat_id:
+            break
+
+    if not matched_cat_id:
+        return None
+
+    now = utc_now()
+    comp_int = 1 if completed else 0
+    comp_at = now if completed else ""
+
+    conn.execute(
+        """
+        INSERT INTO career_roadmap_topic_progress (
+            id, user_id, role_key, curriculum_version, category_id, topic_id,
+            completed, completed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, role_key, curriculum_version, topic_id) DO UPDATE SET
+            completed = excluded.completed,
+            completed_at = excluded.completed_at,
+            updated_at = excluded.updated_at
+        """,
+        (new_id("crmp"), user_id, role_key, version, matched_cat_id, topic_id, comp_int, comp_at, now),
+    )
+
+    if completed:
+        conn.execute(
+            """
+            UPDATE career_weekly_tasks
+            SET status = 'completed', actual_minutes = planned_minutes, updated_at = ?
+            WHERE user_id = ? AND role_key = ? AND topic_id = ? AND status IN ('pending', 'rescheduled')
+            """,
+            (now, user_id, role_key, topic_id),
+        )
+
+    weekly_tasks = sync_weekly_plan_with_roadmap(conn, user_id, profile, force_rebalance=False)
+    roadmap = get_role_roadmap_with_progress(conn, user_id, target_career)
+    return {"roadmap": roadmap, "weekly_tasks": weekly_tasks}
+
+
 def generate_adaptive_weekly_plan(
     conn: Any,
     user_id: str,
@@ -1342,87 +1716,13 @@ def generate_adaptive_weekly_plan(
     preserve_existing: bool = True,
 ) -> List[Dict[str, Any]]:
     """
-    Generate or top-up an Adaptive Weekly Execution Plan respecting available study hours.
-    Does not silently overwrite existing user schedule tasks when preserve_existing=True.
+    Delegates to single-source-of-truth roadmap synchronization so Prep Plan & Weekly
+    always reflect the user's active role-specific roadmap and completion progress.
     """
-    from backend.database import new_id, utc_now
-
-    week_start = _current_week_start_iso()
-    existing_rows = conn.execute(
-        "SELECT * FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? ORDER BY created_at ASC",
-        (user_id, week_start),
-    ).fetchall()
-
-    if preserve_existing and existing_rows:
-        return [dict(r) for r in existing_rows]
-
-    hours_per_week = max(2, min(60, int(profile.get("available_hours_per_week") or 10)))
-    total_budget_minutes = hours_per_week * 60
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-
-    priority_items = gap_analysis.get("priority_areas") or []
-    if not priority_items:
-        priority_items = [
-            {"category": "programming", "label": "Programming Languages", "gap": 20},
-            {"category": "dsa", "label": "DSA", "gap": 25},
-            {"category": "projects", "label": "Practical Projects", "gap": 20},
-        ]
-
-    # Cap at realistic 5-7 tasks fitting within weekly budget
-    num_tasks = min(7, max(3, hours_per_week // 2))
-    mins_per_task = max(30, min(120, total_budget_minutes // num_tasks))
-    activities = ["learning", "practice", "revision", "project"]
-
-    if not preserve_existing:
-        conn.execute(
-            "DELETE FROM career_weekly_tasks WHERE user_id = ? AND week_start_date = ? AND status = 'pending'",
-            (user_id, week_start),
-        )
-
-    now = utc_now()
-    created: List[Dict[str, Any]] = []
-    for idx in range(num_tasks):
-        target_gap = priority_items[idx % len(priority_items)]
-        act = activities[idx % len(activities)]
-        cat = target_gap.get("category", "programming")
-        label = target_gap.get("label", "Core Engineering")
-        gap_val = int(target_gap.get("gap") or 15)
-        prio = "critical" if gap_val >= 20 else ("high" if gap_val >= 10 else "normal")
-        tid = new_id("wtask")
-        day = days[idx % len(days)]
-        topic = f"{label}: {act.title()} Block"
-        objective = f"Reduce {label} skill gap ({gap_val} pts) via structured {act}."
-        criteria = (
-            f"Complete {mins_per_task}m focused {act} and log >= 70% on topic check."
-        )
-        conn.execute(
-            """
-            INSERT INTO career_weekly_tasks (
-                id, user_id, week_start_date, day_of_week, topic, skill_category,
-                learning_objective, activity_type, planned_minutes, actual_minutes,
-                priority, completion_criteria, status, source_type, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending', 'planner', ?, ?)
-            """,
-            (
-                tid,
-                user_id,
-                week_start,
-                day,
-                topic,
-                cat,
-                objective,
-                act,
-                mins_per_task,
-                prio,
-                criteria,
-                now,
-                now,
-            ),
-        )
-        row = conn.execute("SELECT * FROM career_weekly_tasks WHERE id = ?", (tid,)).fetchone()
-        if row:
-            created.append(dict(row))
-    return created
+    _ = gap_analysis
+    return sync_weekly_plan_with_roadmap(
+        conn, user_id, profile, force_rebalance=(not preserve_existing)
+    )
 
 
 def update_weekly_task_and_rebalance(
@@ -1454,14 +1754,42 @@ def update_weekly_task_and_rebalance(
         next_day = days[(cur_idx + 1) % len(days)]
         next_status = "rescheduled"
 
+    next_manual = 1 if (day_of_week and day_of_week != row["day_of_week"]) else int(row.get("is_manual") or 0)
+    now = utc_now()
     conn.execute(
         """
         UPDATE career_weekly_tasks
-        SET status = ?, day_of_week = ?, actual_minutes = ?, priority = ?, updated_at = ?
+        SET status = ?, day_of_week = ?, actual_minutes = ?, priority = ?, is_manual = ?, updated_at = ?
         WHERE id = ? AND user_id = ?
         """,
-        (next_status, next_day, next_actual, next_prio, utc_now(), task_id, user_id),
+        (next_status, next_day, next_actual, next_prio, next_manual, now, task_id, user_id),
     )
+
+    if next_status == "completed" and row.get("topic_id") and row.get("role_key"):
+        from backend.database import new_id
+        conn.execute(
+            """
+            INSERT INTO career_roadmap_topic_progress (
+                id, user_id, role_key, curriculum_version, category_id, topic_id,
+                completed, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(user_id, role_key, curriculum_version, topic_id) DO UPDATE SET
+                completed = 1,
+                completed_at = excluded.completed_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                new_id("crmp"),
+                user_id,
+                row["role_key"],
+                row.get("curriculum_version") or "2026.1",
+                row.get("category_id") or "",
+                row["topic_id"],
+                now,
+                now,
+            ),
+        )
+
     updated = conn.execute("SELECT * FROM career_weekly_tasks WHERE id = ?", (task_id,)).fetchone()
     return dict(updated) if updated else None
 

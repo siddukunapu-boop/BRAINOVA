@@ -854,6 +854,21 @@ CREATE TABLE IF NOT EXISTS topic_mastery_reviews (
 
 CREATE INDEX IF NOT EXISTS idx_topic_mastery_reviews_user ON topic_mastery_reviews(user_id, next_review_at);
 
+CREATE TABLE IF NOT EXISTS career_roadmap_topic_progress (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_key TEXT NOT NULL,
+    curriculum_version TEXT NOT NULL,
+    category_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, role_key, curriculum_version, topic_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_career_roadmap_progress_user_role ON career_roadmap_topic_progress(user_id, role_key, curriculum_version);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -972,11 +987,42 @@ def _migration_004_career_planner_and_srs(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_005_career_roadmap_progress(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS career_roadmap_topic_progress (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role_key TEXT NOT NULL,
+            curriculum_version TEXT NOT NULL,
+            category_id TEXT NOT NULL,
+            topic_id TEXT NOT NULL,
+            completed INTEGER NOT NULL DEFAULT 0,
+            completed_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, role_key, curriculum_version, topic_id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_career_roadmap_progress_user_role ON career_roadmap_topic_progress(user_id, role_key, curriculum_version)"
+    )
+    _ensure_column(conn, "career_weekly_tasks", "role_key", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "career_weekly_tasks", "curriculum_version", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "career_weekly_tasks", "category_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "career_weekly_tasks", "topic_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "career_weekly_tasks", "is_manual", "INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_career_weekly_tasks_role ON career_weekly_tasks(user_id, role_key, status)"
+    )
+
+
 SCHEMA_MIGRATIONS = [
     (1, "baseline_columns", _migration_001_baseline_columns),
     (2, "phase1_integrity_indexes", _migration_002_phase1_integrity_indexes),
     (3, "encrypt_legacy_credentials", _migration_003_encrypt_credentials),
     (4, "career_planner_and_srs", _migration_004_career_planner_and_srs),
+    (5, "career_roadmap_progress", _migration_005_career_roadmap_progress),
 ]
 
 
@@ -1013,6 +1059,7 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     _migration_002_phase1_integrity_indexes(conn)
     _migration_003_encrypt_credentials(conn)
     _migration_004_career_planner_and_srs(conn)
+    _migration_005_career_roadmap_progress(conn)
 
 
 def init_db() -> None:
