@@ -8,6 +8,11 @@ import {
   ArrowLeft,
   Eye,
   EyeOff,
+  Bot,
+  Map,
+  Briefcase,
+  Zap,
+  Timer,
 } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { useApp, UserProfile } from '../context/AppContext';
@@ -27,6 +32,39 @@ interface PendingVerificationState {
   expired: boolean;
   otp_invalidated?: boolean;
 }
+
+const STUDYOS_FEATURES = [
+  {
+    num: '01',
+    title: 'AI Mentor',
+    desc: 'Intelligent assistance for learning, understanding concepts, and solving doubts.',
+    icon: Bot,
+  },
+  {
+    num: '02',
+    title: 'AI Roadmaps',
+    desc: 'Structured learning journeys that help students progress toward their goals.',
+    icon: Map,
+  },
+  {
+    num: '03',
+    title: 'Career Launchpad',
+    desc: 'Career preparation, skill development, and placement-focused guidance.',
+    icon: Briefcase,
+  },
+  {
+    num: '04',
+    title: 'Tech Pulse',
+    desc: 'Stay informed about technology, development, and industry updates.',
+    icon: Zap,
+  },
+  {
+    num: '05',
+    title: 'Study & Focus',
+    desc: 'Study journals, productivity tools, and focus sessions to build consistency.',
+    icon: Timer,
+  },
+];
 
 export const AuthPage: React.FC = () => {
   const { loginWithToken, addToast } = useApp();
@@ -237,14 +275,102 @@ export const AuthPage: React.FC = () => {
   };
 
   return (
-    <div className="auth-page-shell">
-      <div className="auth-center-stack">
-        <div className="auth-brand-header">
-          <BrainovaLogo size={42} variant="auth" alt="StudyOS Logo" />
-          <span className="auth-brand-wordmark">StudyOS</span>
-        </div>
+    <div className="auth-page-shell" data-testid="studyos-landing-auth">
+      <div className="auth-ambient-glow" aria-hidden="true" />
 
-        <div className="auth-card">
+      <div className="auth-landing-grid">
+        {/* LEFT COLUMN — StudyOS Brand, Features & Authentic Product Showcase */}
+        <section className="auth-hero-pane" aria-label="About StudyOS">
+          <div className="auth-hero-brand">
+            <BrainovaLogo size={40} variant="auth" alt="StudyOS Logo" />
+            <span className="auth-brand-wordmark">StudyOS</span>
+          </div>
+
+          <div className="auth-hero-copy">
+            <div className="auth-hero-eyebrow">YOUR PERSONAL LEARNING ECOSYSTEM</div>
+            <h1 className="auth-hero-headline">
+              YOUR LEARNING.
+              <br />
+              <span>YOUR FUTURE.</span>
+            </h1>
+            <p className="auth-hero-sub">
+              One intelligent platform to learn, plan, focus, and grow.
+            </p>
+          </div>
+
+          <div className="auth-features-list" aria-label="Key StudyOS features">
+            {STUDYOS_FEATURES.map((feat, idx) => {
+              const Icon = feat.icon;
+              return (
+                <div
+                  key={feat.num}
+                  className="auth-feature-item"
+                  style={{ animationDelay: `${80 + idx * 55}ms` }}
+                >
+                  <div className="auth-feature-icon" aria-hidden="true">
+                    <Icon size={16} />
+                  </div>
+                  <div className="auth-feature-text">
+                    <div className="auth-feature-title-row">
+                      <span className="auth-feature-num">{feat.num}</span>
+                      <span className="auth-feature-title">{feat.title}</span>
+                    </div>
+                    <p className="auth-feature-desc">{feat.desc}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Authentic Product Workspace Preview */}
+          <div className="auth-showcase-dock" aria-hidden="true">
+            <div className="auth-preview-window">
+              <div className="auth-preview-topbar">
+                <div className="auth-preview-dots">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <span className="auth-preview-label">StudyOS Workspace</span>
+              </div>
+              <div className="auth-preview-body">
+                <div className="auth-preview-card auth-preview-roadmap">
+                  <div className="auth-preview-kicker">AI ROADMAP · ACTIVE TRACK</div>
+                  <div className="auth-preview-title">Full Stack Engineering Path</div>
+                  <div className="auth-preview-bars">
+                    <div className="auth-preview-bar-track">
+                      <div className="auth-preview-bar-fill" style={{ width: '74%' }} />
+                    </div>
+                    <div className="auth-preview-bar-track">
+                      <div className="auth-preview-bar-fill" style={{ width: '52%' }} />
+                    </div>
+                  </div>
+                </div>
+                <div className="auth-preview-side">
+                  <div className="auth-preview-card auth-preview-mini">
+                    <div className="auth-preview-kicker">AI MENTOR</div>
+                    <div className="auth-preview-mini-line">Explain async/await &amp; event loops</div>
+                  </div>
+                  <div className="auth-preview-card auth-preview-mini">
+                    <div className="auth-preview-kicker">FOCUS SESSION</div>
+                    <div className="auth-preview-mini-line">25:00 Deep Work · Focus Music</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <footer className="auth-landing-footer">
+            <span>StudyOS</span>
+            <span aria-hidden="true">·</span>
+            <span>Learn Smarter. Think Bigger.</span>
+          </footer>
+        </section>
+
+        {/* RIGHT COLUMN — Integrated Authentication Card */}
+        <section className="auth-form-pane" aria-label="StudyOS authentication">
+          <div className="auth-center-stack">
+            <div className="auth-card">
           {verifiedSuccess ? (
             <div className="auth-success-card" data-testid="auth-verified-success">
               <div className="auth-success-emblem" aria-hidden="true">
@@ -554,7 +680,9 @@ export const AuthPage: React.FC = () => {
               </div>
             </>
           )}
-        </div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );
