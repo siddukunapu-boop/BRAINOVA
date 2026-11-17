@@ -11,18 +11,21 @@ Provides:
 """
 
 import array
+import hashlib
 import io
+import json
 import math
 import os
 import random
 import re
 import sqlite3
+import urllib.parse
 import wave
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-from backend.database import AUDIO_DIR, is_mongo_authoritative, new_id, utc_now
+from backend.database import AUDIO_DIR, BASE_DIR, is_mongo_authoritative, new_id, utc_now
 
 DEFAULT_MAX_UPLOAD_KB = 40_000
 DEFAULT_MAX_UPLOAD_BYTES = DEFAULT_MAX_UPLOAD_KB * 1024
@@ -575,6 +578,92 @@ def resolve_safe_user_track_path(user_id: str, storage_filename: str) -> str:
     return candidate
 
 
+def get_public_default_audio_dir() -> str:
+    override = (os.environ.get("BRAINOVA_DEFAULT_AUDIO_DIR") or "").strip()
+    if override:
+        return override
+    return os.path.join(BASE_DIR, "public", "audio")
+
+
+def _format_default_track_entry(filename: str, file_size: int) -> Dict[str, Any]:
+    stem = os.path.splitext(filename)[0]
+    clean_title = re.sub(r"[_-]+", " ", stem).strip() or filename
+    track_hash = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:12]
+    track_id = f"default_{track_hash}"
+    size_mb = round(file_size / (1024 * 1024), 2) if file_size >= 1024 * 1024 else round(file_size / 1024, 1)
+    size_unit = "MB" if file_size >= 1024 * 1024 else "KB"
+    return {
+        "id": track_id,
+        "title": clean_title,
+        "original_filename": filename,
+        "subtitle": f"{filename} · MP3 ({size_mb} {size_unit})",
+        "category": "default",
+        "category_label": "Default Music",
+        "source_type": "default",
+        "read_only": True,
+        "file_format": "MP3",
+        "mime_type": "audio/mpeg",
+        "file_size": int(file_size),
+        "duration_seconds": 0.0,
+        "is_builtin": True,
+        "stream_url": f"/audio/{urllib.parse.quote(filename)}",
+        "api_stream_url": f"/api/music/default/{track_id}/stream",
+        "license": "StudyOS Shared Default Music (Read-Only)",
+    }
+
+
+def discover_default_audio_tracks() -> List[Dict[str, Any]]:
+    """
+    Dynamically discover all valid .mp3 files in public/audio/default/ (no hardcoded filenames).
+    Falls back to backend/default_music_manifest.json when running in a serverless bundle
+    where static public/ assets are served separately by the CDN.
+    """
+    default_dir = get_public_default_audio_dir()
+    tracks: List[Dict[str, Any]] = []
+
+    if os.path.isdir(default_dir):
+        real_root = os.path.realpath(default_dir)
+        for fname in sorted(os.listdir(default_dir), key=lambda s: s.lower()):
+            if fname.startswith(".") or not fname.lower().endswith(".mp3"):
+                continue
+            candidate = os.path.realpath(os.path.join(default_dir, fname))
+            if not candidate.startswith(real_root + os.sep) or not os.path.isfile(candidate):
+                continue
+            size = os.path.getsize(candidate)
+            if size <= 0:
+                continue
+            tracks.append(_format_default_track_entry(fname, size))
+        return tracks
+
+    manifest_path = os.path.join(BASE_DIR, "backend", "default_music_manifest.json")
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+            if isinstance(entries, list):
+                for entry in entries:
+                    fname = str((entry or {}).get("filename") or "").strip()
+                    size = int((entry or {}).get("file_size") or 0)
+                    if fname and not fname.startswith(".") and fname.lower().endswith(".mp3") and size > 0:
+                        tracks.append(_format_default_track_entry(os.path.basename(fname), size))
+        except Exception:
+            pass
+    return tracks
+
+
+def resolve_default_audio_file_path(track_id: str) -> Tuple[str, Dict[str, Any]]:
+    """Resolve a shared default track ID to its safe local disk path and metadata."""
+    default_dir = get_public_default_audio_dir()
+    real_root = os.path.realpath(default_dir)
+    for track in discover_default_audio_tracks():
+        if track["id"] == track_id:
+            candidate = os.path.realpath(os.path.join(default_dir, track["original_filename"]))
+            if candidate.startswith(real_root + os.sep) and os.path.isfile(candidate):
+                return candidate, track
+            raise HTTPException(status_code=404, detail="Shared default audio file not found on disk.")
+    raise HTTPException(status_code=404, detail="Shared default audio track not found.")
+
+
 def format_uploaded_track_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row["id"],
@@ -583,6 +672,8 @@ def format_uploaded_track_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "subtitle": f"{row.get('original_filename') or 'Audio'} · {row['file_format']} ({round(int(row.get('file_size') or 0) / 1024, 1)} KB)",
         "category": "uploaded",
         "category_label": "Personal Library",
+        "source_type": "personal",
+        "read_only": False,
         "file_format": row["file_format"],
         "mime_type": row["mime_type"],
         "file_size": int(row.get("file_size") or 0),
@@ -594,6 +685,7 @@ def format_uploaded_track_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def list_music_library_for_user(conn: sqlite3.Connection, user_id: str) -> Dict[str, Any]:
+    default_list = discover_default_audio_tracks()
     rows = conn.execute(
         """
         SELECT id, user_id, title, original_filename, storage_filename, file_format,
@@ -614,12 +706,18 @@ def list_music_library_for_user(conn: sqlite3.Connection, user_id: str) -> Dict[
     return {
         "categories": [
             {
+                "id": "default",
+                "name": "Default Music",
+                "description": "Shared read-only focus tracks available to all accounts.",
+            },
+            {
                 "id": "uploaded",
-                "name": "Personal Music Library",
+                "name": "Personal Library",
                 "description": "Your private uploaded MP3, WAV, and OGG audio tracks.",
-            }
+            },
         ],
-        "builtin_tracks": [],
+        "default_tracks": default_list,
+        "builtin_tracks": default_list,
         "uploaded_tracks": uploaded_list,
         "max_upload_bytes": max_bytes,
         "max_upload_kb": max_kb,
@@ -1085,6 +1183,13 @@ def abort_chunked_audio_upload(
 
 
 def delete_uploaded_user_track(conn: sqlite3.Connection, user_id: str, track_id: str) -> Dict[str, Any]:
+    if track_id.startswith("default_") or track_id.startswith("builtin_") or any(
+        t["id"] == track_id for t in discover_default_audio_tracks()
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Shared default music tracks are read-only and cannot be deleted or modified.",
+        )
     row = conn.execute(
         "SELECT * FROM user_music_tracks WHERE id = ?",
         (track_id,),

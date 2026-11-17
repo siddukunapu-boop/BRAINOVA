@@ -5296,6 +5296,56 @@ def stream_builtin_music_track(
     )
 
 
+@app.get("/api/music/default/{track_id}/stream")
+def stream_default_music_track(
+    track_id: str,
+    request: Request = None,  # type: ignore[assignment]
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import RECOMMENDED_UPLOAD_CHUNK_BYTES, resolve_default_audio_file_path
+
+    _ = current_user
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "", track_id)
+    disk_path, track_meta = resolve_default_audio_file_path(safe_id)
+    total_size = os.path.getsize(disk_path)
+    range_header = (request.headers.get("range") or request.headers.get("Range")) if request is not None else None
+    base_headers = {
+        "Cache-Control": "public, max-age=86400",
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'inline; filename="{track_meta["original_filename"]}"',
+    }
+    if range_header and total_size > 0:
+        m = re.match(r"bytes=(\d*)-(\d*)", range_header.strip())
+        if not m:
+            raise HTTPException(status_code=416, detail="Invalid Range header.")
+        start_str, end_str = m.groups()
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else min(total_size - 1, start + RECOMMENDED_UPLOAD_CHUNK_BYTES - 1)
+        if start >= total_size or end < start:
+            raise HTTPException(status_code=416, detail="Requested range not satisfiable.")
+        end = min(end, total_size - 1, start + RECOMMENDED_UPLOAD_CHUNK_BYTES - 1)
+        length = end - start + 1
+        with open(disk_path, "rb") as f:
+            f.seek(start)
+            chunk = f.read(length)
+        return Response(
+            content=chunk,
+            status_code=206,
+            media_type="audio/mpeg",
+            headers={
+                **base_headers,
+                "Content-Range": f"bytes {start}-{end}/{total_size}",
+                "Content-Length": str(len(chunk)),
+            },
+        )
+    return FileResponse(
+        disk_path,
+        media_type="audio/mpeg",
+        filename=track_meta["original_filename"],
+        headers=base_headers,
+    )
+
+
 class MusicChunkUploadInitRequest(BaseModel):
     filename: str
     file_size: int = Field(..., ge=0)

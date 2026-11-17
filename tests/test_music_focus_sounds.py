@@ -489,6 +489,86 @@ class TestMusicFocusSoundsAndStudyOSFixes(unittest.TestCase):
         self.assertEqual(own_cancel.status_code, 200)
         self.assertTrue(own_cancel.json()["aborted"])
 
+    def test_sep_01_shared_default_6_mp3_and_strict_user_isolation(self) -> None:
+        """F.1-F.9: Dynamic 6-MP3 default discovery, read-only default protection, and strict User A <-> User B isolation."""
+        default_dir = os.path.join(self.temp_dir, "default_audio_test")
+        os.makedirs(default_dir, exist_ok=True)
+        mp3_payload = b"ID3\x03\x00\x00\x00\x00\x00\x00" + (b"\xff\xfb\x90\x00" * 128)
+        filenames = [
+            "01_deep_space_focus.mp3",
+            "02_rainy_library.mp3",
+            "03_piano_nocturne.mp3",
+            "04_brown_noise_pure.mp3",
+            "05_lofi_study_pulse.mp3",
+            "06_ocean_horizon.mp3",
+        ]
+        for fname in filenames:
+            with open(os.path.join(default_dir, fname), "wb") as f:
+                f.write(mp3_payload)
+
+        prev_default_dir = os.environ.get("BRAINOVA_DEFAULT_AUDIO_DIR")
+        os.environ["BRAINOVA_DEFAULT_AUDIO_DIR"] = default_dir
+        try:
+            # 1. Unauthenticated requests rejected
+            self.assertEqual(self.client.get("/api/music/tracks").status_code, 401)
+
+            # 2. Both User A and User B see all 6 default tracks and can stream them with Range support
+            lib_a = self.client.get("/api/music/tracks", headers=self.headers_a).json()
+            lib_b = self.client.get("/api/music/tracks", headers=self.headers_b).json()
+            self.assertEqual(len(lib_a["default_tracks"]), 6)
+            self.assertEqual(len(lib_b["default_tracks"]), 6)
+            self.assertEqual(
+                [t["original_filename"] for t in lib_a["default_tracks"]],
+                sorted(filenames, key=str.lower),
+            )
+            for t in lib_a["default_tracks"]:
+                self.assertTrue(t["is_builtin"])
+                self.assertTrue(t["read_only"])
+                self.assertEqual(t["source_type"], "default")
+                self.assertEqual(self.client.get(t["api_stream_url"], headers=self.headers_a).status_code, 200)
+                self.assertEqual(
+                    self.client.get(t["api_stream_url"], headers={**self.headers_b, "Range": "bytes=0-127"}).status_code,
+                    206,
+                )
+                self.assertEqual(self.client.get(t["api_stream_url"]).status_code, 401)
+
+            # 3. Neither user can delete or modify shared default tracks
+            first_default_id = lib_a["default_tracks"][0]["id"]
+            self.assertEqual(self.client.delete(f"/api/music/tracks/{first_default_id}", headers=self.headers_a).status_code, 403)
+            self.assertEqual(self.client.delete(f"/api/music/tracks/{first_default_id}", headers=self.headers_b).status_code, 403)
+
+            # 4. User A uploads a personal song; stored outside public/ and invisible to User B
+            up_a = self._run_chunked_upload(self.headers_a, "user_a_song.mp3", mp3_payload)
+            self.assertEqual(up_a.status_code, 200)
+            track_a = up_a.json()["track"]
+            self.assertEqual(track_a["source_type"], "personal")
+            self.assertFalse(track_a["is_builtin"])
+
+            lib_a2 = self.client.get("/api/music/tracks", headers=self.headers_a).json()
+            lib_b2 = self.client.get("/api/music/tracks", headers=self.headers_b).json()
+            self.assertEqual([t["id"] for t in lib_a2["uploaded_tracks"]], [track_a["id"]])
+            self.assertEqual(lib_b2["uploaded_tracks"], [])
+            self.assertEqual(len(lib_b2["default_tracks"]), 6)
+
+            # User A can stream; User B cannot stream or delete User A's track
+            self.assertEqual(self.client.get(track_a["stream_url"], headers=self.headers_a).status_code, 200)
+            self.assertEqual(self.client.get(track_a["stream_url"], headers=self.headers_b).status_code, 403)
+            self.assertEqual(self.client.delete(f"/api/music/tracks/{track_a['id']}", headers=self.headers_b).status_code, 403)
+
+            # 5. User B uploads a different personal song; User A cannot access or delete it
+            up_b = self._run_chunked_upload(self.headers_b, "user_b_song.mp3", mp3_payload)
+            self.assertEqual(up_b.status_code, 200)
+            track_b = up_b.json()["track"]
+            self.assertEqual(self.client.get(track_b["stream_url"], headers=self.headers_b).status_code, 200)
+            self.assertEqual(self.client.get(track_b["stream_url"], headers=self.headers_a).status_code, 403)
+            self.assertEqual(self.client.delete(f"/api/music/tracks/{track_b['id']}", headers=self.headers_a).status_code, 403)
+        finally:
+            if prev_default_dir is None:
+                os.environ.pop("BRAINOVA_DEFAULT_AUDIO_DIR", None)
+            else:
+                os.environ["BRAINOVA_DEFAULT_AUDIO_DIR"] = prev_default_dir
+            shutil.rmtree(default_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

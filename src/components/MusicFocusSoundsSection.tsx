@@ -49,10 +49,9 @@ function getCategoryIcon(category: string) {
 
 export const MusicFocusSoundsSection: React.FC = () => {
   const {
-    categories,
-    builtinTracks,
+    defaultTracks,
     uploadedTracks,
-    filteredTracks,
+    allTracks,
     currentTrack,
     selectedCategory,
     isPlaying,
@@ -148,6 +147,16 @@ export const MusicFocusSoundsSection: React.FC = () => {
   const categoryTabs: Array<{ id: MusicCategoryFilter; label: string; count: number }> = [
     {
       id: 'all',
+      label: 'All Libraries',
+      count: allTracks.length,
+    },
+    {
+      id: 'default',
+      label: 'Default Music',
+      count: defaultTracks.length,
+    },
+    {
+      id: 'uploaded',
       label: 'Personal Library',
       count: uploadedTracks.length,
     },
@@ -373,106 +382,158 @@ export const MusicFocusSoundsSection: React.FC = () => {
         })}
       </div>
 
-      {/* Sound Library Grid */}
-      <div className="mfs-tracks-grid" data-testid="music-tracks-grid">
-        {filteredTracks.length === 0 ? (
-          <div className="mfs-empty-state" data-testid="music-empty-state">
-            <Headphones size={26} color="var(--text-muted)" />
-            <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-              No tracks in this category yet
-            </div>
-            <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
-              Upload a personal MP3, WAV, or OGG focus track below, or switch categories above.
-            </div>
-          </div>
-        ) : (
-          filteredTracks.map((track: MusicTrack) => {
-            const isSelected = currentTrack?.id === track.id;
-            const isTrackPlaying = isSelected && isPlaying;
-            return (
-              <div
-                key={track.id}
-                className={`mfs-track-card ${isSelected ? 'is-selected' : ''} ${
-                  isTrackPlaying ? 'is-playing' : ''
-                }`}
-                data-testid={`music-track-card-${track.id}`}
-              >
-                <div className="mfs-track-card-top">
-                  <div className="mfs-track-icon-wrap" aria-hidden="true">
-                    {getCategoryIcon(track.category)}
-                  </div>
-                  <div className="mfs-track-badges">
-                    <span className="mfs-badge-cat">{track.category_label}</span>
-                    <span className="mfs-badge-fmt" data-testid={`music-track-format-${track.id}`}>
-                      {track.file_format}
-                    </span>
-                  </div>
+      {/* Sound Library Sections (Strict Separation: Default Music vs. Personal Library) */}
+      {(() => {
+        const showDefault = selectedCategory === 'all' || selectedCategory === 'default';
+        const showPersonal = selectedCategory === 'all' || selectedCategory === 'uploaded';
+
+        const renderTrackCard = (track: MusicTrack) => {
+          const isSelected = currentTrack?.id === track.id;
+          const isTrackPlaying = isSelected && isPlaying;
+          return (
+            <div
+              key={track.id}
+              className={`mfs-track-card ${isSelected ? 'is-selected' : ''} ${
+                isTrackPlaying ? 'is-playing' : ''
+              } ${track.is_builtin ? 'is-default-shared' : 'is-personal-private'}`}
+              data-testid={`music-track-card-${track.id}`}
+            >
+              <div className="mfs-track-card-top">
+                <div className="mfs-track-icon-wrap" aria-hidden="true">
+                  {getCategoryIcon(track.category)}
                 </div>
-
-                <div className="mfs-track-body">
-                  <div className="mfs-track-title" data-testid={`music-track-title-${track.id}`}>
-                    {track.title}
-                  </div>
-                  <div className="mfs-track-desc">
-                    {track.original_filename ? `${track.original_filename} · ` : ''}
-                    {track.subtitle}
-                  </div>
-                </div>
-
-                <div className="mfs-track-footer">
-                  <div className="mfs-track-duration">
-                    {track.duration_seconds > 0
-                      ? formatTime(track.duration_seconds)
-                      : 'Audio'}
-                    {track.created_at
-                      ? ` · ${new Date(track.created_at).toLocaleDateString()}`
-                      : ''}
-                  </div>
-
-                  <div className="mfs-track-actions">
-                    {!track.is_builtin && (
-                      <button
-                        type="button"
-                        className="mfs-delete-btn"
-                        onClick={() => setConfirmDeleteTrack(track)}
-                        disabled={deletingTrackId === track.id}
-                        aria-label={`Delete ${track.title}`}
-                        data-testid={`music-delete-btn-${track.id}`}
-                        title="Delete uploaded song"
-                      >
-                        <Trash2 size={14} aria-hidden="true" />
-                        <span>{deletingTrackId === track.id ? 'Deleting...' : 'Delete'}</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      className={`mfs-card-play-btn ${isTrackPlaying ? 'playing' : ''}`}
-                      onClick={() => selectTrack(track.id, true)}
-                      aria-label={
-                        isTrackPlaying ? `Pause ${track.title}` : `Play ${track.title}`
-                      }
-                      data-testid={`music-card-play-${track.id}`}
-                    >
-                      {isTrackPlaying ? (
-                        <>
-                          <Pause size={14} />
-                          <span>Pause</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play size={14} />
-                          <span>{isSelected ? 'Resume' : 'Play'}</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
+                <div className="mfs-track-badges">
+                  <span className="mfs-badge-cat">
+                    {track.is_builtin ? 'Shared · Read-Only' : 'Private'}
+                  </span>
+                  <span className="mfs-badge-fmt" data-testid={`music-track-format-${track.id}`}>
+                    {track.file_format}
+                  </span>
                 </div>
               </div>
-            );
-          })
-        )}
-      </div>
+
+              <div className="mfs-track-body">
+                <div className="mfs-track-title" data-testid={`music-track-title-${track.id}`}>
+                  {track.title}
+                </div>
+                <div className="mfs-track-desc">
+                  {track.original_filename ? `${track.original_filename} · ` : ''}
+                  {track.subtitle}
+                </div>
+              </div>
+
+              <div className="mfs-track-footer">
+                <div className="mfs-track-duration">
+                  {track.duration_seconds > 0 ? formatTime(track.duration_seconds) : 'MP3 Audio'}
+                  {track.created_at
+                    ? ` · ${new Date(track.created_at).toLocaleDateString()}`
+                    : ''}
+                </div>
+
+                <div className="mfs-track-actions">
+                  {!track.is_builtin && (
+                    <button
+                      type="button"
+                      className="mfs-delete-btn"
+                      onClick={() => setConfirmDeleteTrack(track)}
+                      disabled={deletingTrackId === track.id}
+                      aria-label={`Delete ${track.title}`}
+                      data-testid={`music-delete-btn-${track.id}`}
+                      title="Delete uploaded song"
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      <span>{deletingTrackId === track.id ? 'Deleting...' : 'Delete'}</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    className={`mfs-card-play-btn ${isTrackPlaying ? 'playing' : ''}`}
+                    onClick={() => selectTrack(track.id, true)}
+                    aria-label={isTrackPlaying ? `Pause ${track.title}` : `Play ${track.title}`}
+                    data-testid={`music-card-play-${track.id}`}
+                  >
+                    {isTrackPlaying ? (
+                      <>
+                        <Pause size={14} />
+                        <span>Pause</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play size={14} />
+                        <span>{isSelected ? 'Resume' : 'Play'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        return (
+          <div className="mfs-libraries-stack" data-testid="music-tracks-grid">
+            {showDefault && (
+              <div className="mfs-library-group" data-testid="music-default-library-section">
+                <div className="mfs-library-group-header">
+                  <div>
+                    <h3 className="mfs-library-group-title">Default Music — Shared Library</h3>
+                    <p className="mfs-library-group-sub">
+                      Curated shared focus tracks available to every account (read-only).
+                    </p>
+                  </div>
+                  <span className="mfs-group-pill mfs-group-pill-gold">
+                    {defaultTracks.length} {defaultTracks.length === 1 ? 'Track' : 'Tracks'}
+                  </span>
+                </div>
+                {defaultTracks.length === 0 ? (
+                  <div className="mfs-empty-state" data-testid="music-default-empty-state">
+                    <Headphones size={22} color="var(--text-muted)" />
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                      No shared default MP3 tracks found
+                    </div>
+                    <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                      Place MP3 files inside <code>public/audio/</code> to make them
+                      available to all users automatically.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mfs-tracks-grid">{defaultTracks.map(renderTrackCard)}</div>
+                )}
+              </div>
+            )}
+
+            {showPersonal && (
+              <div className="mfs-library-group" data-testid="music-personal-library-section">
+                <div className="mfs-library-group-header">
+                  <div>
+                    <h3 className="mfs-library-group-title">Personal Library — Private to You</h3>
+                    <p className="mfs-library-group-sub">
+                      Authenticated tracks uploaded by your account. Never visible to other users.
+                    </p>
+                  </div>
+                  <span className="mfs-group-pill mfs-group-pill-charcoal">
+                    {uploadedTracks.length} {uploadedTracks.length === 1 ? 'Track' : 'Tracks'}
+                  </span>
+                </div>
+                {uploadedTracks.length === 0 ? (
+                  <div className="mfs-empty-state" data-testid="music-empty-state">
+                    <Headphones size={24} color="var(--text-muted)" />
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                      No personal tracks uploaded yet
+                    </div>
+                    <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                      Upload a personal MP3, WAV, or OGG focus track below.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mfs-tracks-grid">{uploadedTracks.map(renderTrackCard)}</div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* User Audio Upload & Personal Tracks Management */}
       <div className="mfs-upload-panel" data-testid="music-upload-panel">

@@ -21,7 +21,7 @@
       "destination": "/api/index.py"
     },
     {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|audio/).*)",
       "destination": "/index.html"
     }
   ]

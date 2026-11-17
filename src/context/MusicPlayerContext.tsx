@@ -12,6 +12,7 @@ import { useApp } from './AppContext';
 
 export type MusicCategoryFilter =
   | 'all'
+  | 'default'
   | 'study_music'
   | 'deep_focus'
   | 'focus_noise'
@@ -31,18 +32,22 @@ export interface MusicTrack {
   subtitle: string;
   category: string;
   category_label: string;
+  source_type?: 'default' | 'personal';
+  read_only?: boolean;
   file_format: string;
   mime_type: string;
   file_size?: number;
   duration_seconds: number;
   is_builtin: boolean;
   stream_url: string;
+  api_stream_url?: string;
   license?: string;
   created_at?: string;
 }
 
 export interface MusicPlayerContextValue {
   categories: MusicCategoryInfo[];
+  defaultTracks: MusicTrack[];
   builtinTracks: MusicTrack[];
   uploadedTracks: MusicTrack[];
   allTracks: MusicTrack[];
@@ -411,6 +416,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     try {
       const res = await apiRequest<{
         categories: MusicCategoryInfo[];
+        default_tracks?: MusicTrack[];
         builtin_tracks: MusicTrack[];
         uploaded_tracks: MusicTrack[];
         max_upload_bytes?: number;
@@ -430,10 +436,13 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (Array.isArray(res.categories) && res.categories.length > 0) {
         setCategories(res.categories);
       }
-      const nextBuiltin =
-        Array.isArray(res.builtin_tracks) && res.builtin_tracks.length > 0
+      const rawDefaults = Array.isArray(res.default_tracks)
+        ? res.default_tracks
+        : Array.isArray(res.builtin_tracks)
           ? res.builtin_tracks
-          : INITIAL_BUILTIN_TRACKS;
+          : [];
+      const nextBuiltin =
+        rawDefaults.length > 0 ? rawDefaults : INITIAL_BUILTIN_TRACKS;
       const nextUploaded = Array.isArray(res.uploaded_tracks) ? res.uploaded_tracks : [];
 
       setBuiltinTracks(nextBuiltin);
@@ -544,6 +553,20 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // Stop any previous track before loading new source
       audio.pause();
       revokeActiveObjectUrl();
+
+      // Shared static default MP3s (/audio/*) stream natively with full HTTP Range seeking
+      if (track.is_builtin && track.stream_url.startsWith('/audio/')) {
+        loadedTrackIdRef.current = track.id;
+        audio.src = resolveApiUrl(track.stream_url);
+        audio.loop = isLoopingRef.current;
+        audio.volume = isMutedRef.current ? 0 : volumeRef.current;
+        if (track.duration_seconds > 0) {
+          setDuration(track.duration_seconds);
+        }
+        audio.load();
+        setIsLoadingTrack(false);
+        return true;
+      }
 
       const token = getStoredToken();
       let blob: Blob | null = null;
@@ -990,6 +1013,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const contextValue = useMemo<MusicPlayerContextValue>(
     () => ({
       categories,
+      defaultTracks: builtinTracks,
       builtinTracks,
       uploadedTracks,
       allTracks,
