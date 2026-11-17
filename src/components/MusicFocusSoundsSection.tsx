@@ -32,6 +32,19 @@ function formatTime(seconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
+function formatFocusTrackTitle(track: MusicTrack): string {
+  const rawSource = track.original_filename
+    ? track.original_filename.replace(/\.[^/.]+$/, '')
+    : track.title || 'Focus Track';
+  const withoutTrailingId = rawSource.replace(/(?:[-_\s]+\d{4,8})+$/, '');
+  const spaced = (withoutTrailingId || rawSource).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!spaced) return 'Focus Track';
+  return spaced
+    .split(' ')
+    .map((word) => (word ? word.charAt(0).toUpperCase() + word.slice(1) : ''))
+    .join(' ');
+}
+
 function getCategoryIcon(category: string) {
   switch (category) {
     case 'study_music':
@@ -220,11 +233,17 @@ export const MusicFocusSoundsSection: React.FC = () => {
             )}
           </div>
           <div className="mfs-now-playing-title" data-testid="music-current-title">
-            {currentTrack ? currentTrack.title : 'Select a focus track'}
+            {currentTrack
+              ? currentTrack.is_builtin
+                ? formatFocusTrackTitle(currentTrack)
+                : currentTrack.title
+              : 'Select a focus track'}
           </div>
           <div className="mfs-now-playing-subtitle">
             {currentTrack
-              ? currentTrack.subtitle
+              ? currentTrack.is_builtin
+                ? 'Focus Music · Shared Library'
+                : currentTrack.subtitle
               : 'Choose any track below and click Play to begin.'}
           </div>
         </div>
@@ -471,20 +490,77 @@ export const MusicFocusSoundsSection: React.FC = () => {
           );
         };
 
+        const renderDefaultFocusCard = (track: MusicTrack) => {
+          const isSelected = currentTrack?.id === track.id;
+          const isTrackPlaying = isSelected && isPlaying;
+          const displayTitle = formatFocusTrackTitle(track);
+
+          return (
+            <div
+              key={track.id}
+              className={`mfs-focus-card ${isSelected ? 'is-selected' : ''} ${
+                isTrackPlaying ? 'is-playing' : ''
+              }`}
+              data-testid={`music-track-card-${track.id}`}
+            >
+              <div className="mfs-focus-card-left">
+                <div
+                  className={`mfs-focus-icon-wrap ${isTrackPlaying ? 'is-playing' : ''}`}
+                  aria-hidden="true"
+                >
+                  {isTrackPlaying ? (
+                    <span className="mfs-eq" aria-hidden="true">
+                      <span className="mfs-eq-bar" />
+                      <span className="mfs-eq-bar" />
+                      <span className="mfs-eq-bar" />
+                    </span>
+                  ) : (
+                    <Music size={17} />
+                  )}
+                </div>
+
+                <div className="mfs-focus-meta">
+                  <div
+                    className="mfs-focus-title"
+                    title={displayTitle}
+                    data-testid={`music-track-title-${track.id}`}
+                  >
+                    {displayTitle}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className={`mfs-focus-play-btn ${isTrackPlaying ? 'is-playing' : ''}`}
+                onClick={() => selectTrack(track.id, true)}
+                aria-label={isTrackPlaying ? `Pause ${displayTitle}` : `Play ${displayTitle}`}
+                data-testid={`music-card-play-${track.id}`}
+              >
+                {isTrackPlaying ? <Pause size={15} /> : <Play size={15} />}
+              </button>
+            </div>
+          );
+        };
+
         return (
           <div className="mfs-libraries-stack" data-testid="music-tracks-grid">
             {showDefault && (
-              <div className="mfs-library-group" data-testid="music-default-library-section">
-                <div className="mfs-library-group-header">
+              <div
+                className="mfs-library-group mfs-focus-library-group"
+                data-testid="music-default-library-section"
+              >
+                <div className="mfs-library-group-header mfs-focus-header">
                   <div>
-                    <h3 className="mfs-library-group-title">Default Music — Shared Library</h3>
-                    <p className="mfs-library-group-sub">
-                      Curated shared focus tracks available to every account (read-only).
-                    </p>
+                    <h3 className="mfs-focus-heading">Focus Music</h3>
+                    <p className="mfs-focus-subheading">Find your focus. Stay in flow.</p>
                   </div>
-                  <span className="mfs-group-pill mfs-group-pill-gold">
-                    {defaultTracks.length} {defaultTracks.length === 1 ? 'Track' : 'Tracks'}
-                  </span>
+                  <div className="mfs-focus-header-pills">
+                    <span className="mfs-shared-readonly-pill">Shared · Read-Only</span>
+                    <span className="mfs-group-pill mfs-group-pill-gold">
+                      {defaultTracks.length} {defaultTracks.length === 1 ? 'TRACK' : 'TRACKS'}
+                    </span>
+                  </div>
                 </div>
                 {defaultTracks.length === 0 ? (
                   <div className="mfs-empty-state" data-testid="music-default-empty-state">
@@ -498,7 +574,7 @@ export const MusicFocusSoundsSection: React.FC = () => {
                     </div>
                   </div>
                 ) : (
-                  <div className="mfs-tracks-grid">{defaultTracks.map(renderTrackCard)}</div>
+                  <div className="mfs-focus-grid">{defaultTracks.map(renderDefaultFocusCard)}</div>
                 )}
               </div>
             )}
