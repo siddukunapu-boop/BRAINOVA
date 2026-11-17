@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -5296,6 +5296,18 @@ def stream_builtin_music_track(
     )
 
 
+class MusicChunkUploadInitRequest(BaseModel):
+    filename: str
+    file_size: int = Field(..., ge=0)
+    total_chunks: int = Field(..., ge=1, le=128)
+    title: Optional[str] = None
+    content_type: Optional[str] = None
+
+
+class MusicChunkUploadCompleteRequest(BaseModel):
+    upload_id: str
+
+
 @app.post("/api/music/upload")
 async def upload_user_music_track(
     file: UploadFile = File(...),
@@ -5318,12 +5330,83 @@ async def upload_user_music_track(
     return {"track": track}
 
 
+@app.post("/api/music/upload/init")
+def init_chunked_music_upload(
+    req: MusicChunkUploadInitRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import init_chunked_audio_upload
+
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        return init_chunked_audio_upload(
+            conn=conn,
+            user_id=uid,
+            filename=req.filename,
+            file_size=req.file_size,
+            total_chunks=req.total_chunks,
+            title=req.title,
+            content_type=req.content_type,
+        )
+
+
+@app.post("/api/music/upload/chunk")
+async def upload_music_track_chunk(
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import save_audio_upload_chunk
+
+    uid = current_user["id"]
+    raw_chunk = await file.read()
+    with get_db(commit=True) as conn:
+        return save_audio_upload_chunk(
+            conn=conn,
+            user_id=uid,
+            upload_id=upload_id,
+            chunk_index=chunk_index,
+            raw_chunk=raw_chunk,
+        )
+
+
+@app.post("/api/music/upload/complete")
+def complete_chunked_music_upload(
+    req: MusicChunkUploadCompleteRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import complete_chunked_audio_upload
+
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        track = complete_chunked_audio_upload(
+            conn=conn,
+            user_id=uid,
+            upload_id=req.upload_id,
+        )
+    return {"track": track}
+
+
+@app.delete("/api/music/upload/{upload_id}")
+def cancel_chunked_music_upload(
+    upload_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    from backend.music_service import abort_chunked_audio_upload
+
+    uid = current_user["id"]
+    with get_db(commit=True) as conn:
+        return abort_chunked_audio_upload(conn=conn, user_id=uid, upload_id=upload_id)
+
+
 @app.get("/api/music/tracks/{track_id}/stream")
 def stream_uploaded_music_track(
     track_id: str,
+    request: Request = None,  # type: ignore[assignment]
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    from backend.music_service import resolve_safe_user_track_path
+    from backend.music_service import RECOMMENDED_UPLOAD_CHUNK_BYTES, get_user_track_size_and_reader
 
     uid = current_user["id"]
     safe_tid = re.sub(r"[^a-zA-Z0-9_-]", "", track_id)
@@ -5337,17 +5420,64 @@ def stream_uploaded_music_track(
     if row["user_id"] != uid:
         raise HTTPException(status_code=403, detail="You do not have permission to access this audio track.")
 
-    disk_path = resolve_safe_user_track_path(uid, row["storage_filename"])
-    if not os.path.isfile(disk_path):
-        raise HTTPException(
-            status_code=404,
-            detail="Uploaded audio binary is no longer present on ephemeral storage. Please re-upload the track.",
+    total_size, disk_path, grid_out = get_user_track_size_and_reader(
+        user_id=uid,
+        storage_filename=row["storage_filename"],
+        track_id=safe_tid,
+    )
+    range_header = (request.headers.get("range") or request.headers.get("Range")) if request is not None else None
+    base_headers = {
+        "Cache-Control": "private, no-store",
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'inline; filename="{row["original_filename"]}"',
+    }
+
+    if range_header and total_size > 0:
+        m = re.match(r"bytes=(\d*)-(\d*)", range_header.strip())
+        if not m:
+            raise HTTPException(status_code=416, detail="Invalid Range header.")
+        start_str, end_str = m.groups()
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else min(total_size - 1, start + RECOMMENDED_UPLOAD_CHUNK_BYTES - 1)
+        if start >= total_size or end < start:
+            raise HTTPException(status_code=416, detail="Requested range not satisfiable.")
+        end = min(end, total_size - 1, start + RECOMMENDED_UPLOAD_CHUNK_BYTES - 1)
+        length = end - start + 1
+
+        if disk_path is not None:
+            with open(disk_path, "rb") as f:
+                f.seek(start)
+                chunk = f.read(length)
+        else:
+            grid_out.seek(start)
+            chunk = grid_out.read(length)
+
+        headers = {
+            **base_headers,
+            "Content-Range": f"bytes {start}-{end}/{total_size}",
+            "Content-Length": str(len(chunk)),
+        }
+        return Response(content=chunk, status_code=206, media_type=row["mime_type"], headers=headers)
+
+    if disk_path is not None:
+        return FileResponse(
+            disk_path,
+            media_type=row["mime_type"],
+            filename=row["original_filename"],
+            headers=base_headers,
         )
-    return FileResponse(
-        disk_path,
+
+    def _iter_gridfs():
+        while True:
+            piece = grid_out.read(262144)
+            if not piece:
+                break
+            yield piece
+
+    return StreamingResponse(
+        _iter_gridfs(),
         media_type=row["mime_type"],
-        filename=row["original_filename"],
-        headers={"Cache-Control": "private, no-store"},
+        headers={**base_headers, "Content-Length": str(total_size)},
     )
 
 

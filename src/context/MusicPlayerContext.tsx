@@ -57,9 +57,12 @@ export interface MusicPlayerContextValue {
   currentTime: number;
   duration: number;
   isLooping: boolean;
+  maxUploadBytes: number;
+  maxUploadKb: number;
   maxUploadMb: number;
   storageNotice: string;
   uploading: boolean;
+  uploadProgress: number | null;
   deletingTrackId: string | null;
   setCategory: (category: MusicCategoryFilter) => void;
   selectTrack: (trackId: string, autoPlay?: boolean) => Promise<void>;
@@ -73,6 +76,7 @@ export interface MusicPlayerContextValue {
   toggleMute: () => void;
   toggleLoop: () => void;
   uploadTrack: (file: File, customTitle?: string) => Promise<MusicTrack | null>;
+  cancelUpload: () => void;
   deleteTrack: (trackId: string) => Promise<boolean>;
   refreshLibrary: () => Promise<void>;
 }
@@ -210,11 +214,15 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(12);
   const [isLooping, setIsLooping] = useState<boolean>(true);
-  const [maxUploadMb, setMaxUploadMb] = useState<number>(15);
+  const [maxUploadBytes, setMaxUploadBytes] = useState<number>(40000 * 1024);
+  const [maxUploadKb, setMaxUploadKb] = useState<number>(40000);
+  const [maxUploadMb, setMaxUploadMb] = useState<number>(40);
+  const [chunkSizeBytes, setChunkSizeBytes] = useState<number>(2 * 1024 * 1024);
   const [storageNotice, setStorageNotice] = useState<string>(
     'Uploaded audio files are stored in authenticated per-user storage.'
   );
   const [uploading, setUploading] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [deletingTrackId, setDeletingTrackId] = useState<string | null>(null);
 
   // Persistent single Audio instance at root level — never destroyed on route navigation
@@ -224,6 +232,8 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const savedResumePositionRef = useRef<number>(0);
   const syncTimeoutRef = useRef<number | null>(null);
   const deletingInFlightRef = useRef<Set<string>>(new Set());
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const activeUploadIdRef = useRef<string | null>(null);
   const volumeRef = useRef<number>(0.65);
   const isMutedRef = useRef<boolean>(false);
   const isLoopingRef = useRef<boolean>(true);
@@ -403,7 +413,10 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         categories: MusicCategoryInfo[];
         builtin_tracks: MusicTrack[];
         uploaded_tracks: MusicTrack[];
+        max_upload_bytes?: number;
+        max_upload_kb?: number;
         max_upload_mb: number;
+        chunk_size_bytes?: number;
         storage_notice: string;
         preferences?: {
           music_last_track_id?: string;
@@ -425,8 +438,17 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       setBuiltinTracks(nextBuiltin);
       setUploadedTracks(nextUploaded);
+      if (typeof res.max_upload_bytes === 'number' && res.max_upload_bytes > 0) {
+        setMaxUploadBytes(res.max_upload_bytes);
+      }
+      if (typeof res.max_upload_kb === 'number' && res.max_upload_kb > 0) {
+        setMaxUploadKb(res.max_upload_kb);
+      }
       if (typeof res.max_upload_mb === 'number' && res.max_upload_mb > 0) {
         setMaxUploadMb(res.max_upload_mb);
+      }
+      if (typeof res.chunk_size_bytes === 'number' && res.chunk_size_bytes > 0) {
+        setChunkSizeBytes(res.chunk_size_bytes);
       }
       if (res.storage_notice) {
         setStorageNotice(res.storage_notice);
@@ -531,24 +553,63 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         if (token) {
           headers.Authorization = `Bearer ${token}`;
         }
-        const response = await fetch(resolveApiUrl(track.stream_url), { headers });
-        if (!response.ok) {
-          let errMsg = `Unable to load audio track (${response.status}).`;
-          try {
-            const errJson = await response.json();
-            if (errJson?.detail) {
-              errMsg = String(errJson.detail);
+        const streamUrl = resolveApiUrl(track.stream_url);
+        const rangeLimit = 2 * 1024 * 1024;
+        const trackFileSize = track.file_size ?? 0;
+        if (!track.is_builtin && trackFileSize > rangeLimit) {
+          const parts: Blob[] = [];
+          let offset = 0;
+          while (offset < trackFileSize) {
+            const end = Math.min(trackFileSize - 1, offset + rangeLimit - 1);
+            const rangeResp = await fetch(streamUrl, {
+              headers: {
+                ...headers,
+                Range: `bytes=${offset}-${end}`,
+              },
+            });
+            if (!rangeResp.ok) {
+              let errMsg = `Unable to load audio track (${rangeResp.status}).`;
+              try {
+                const errJson = await rangeResp.json();
+                if (errJson?.detail) {
+                  errMsg = String(errJson.detail);
+                }
+              } catch {
+                // ignore json parse failure
+              }
+              setPlaybackError(errMsg);
+              setIsLoadingTrack(false);
+              return false;
             }
-          } catch {
-            // ignore json parse failure
+            const partBlob = await rangeResp.blob();
+            if (partBlob.size === 0) break;
+            parts.push(partBlob);
+            offset += partBlob.size;
+            if (rangeResp.status === 200) {
+              break;
+            }
           }
-          if (!track.is_builtin) {
-            setPlaybackError(errMsg);
-            setIsLoadingTrack(false);
-            return false;
-          }
+          blob = new Blob(parts, { type: track.mime_type || 'audio/mpeg' });
         } else {
-          blob = await response.blob();
+          const response = await fetch(streamUrl, { headers });
+          if (!response.ok) {
+            let errMsg = `Unable to load audio track (${response.status}).`;
+            try {
+              const errJson = await response.json();
+              if (errJson?.detail) {
+                errMsg = String(errJson.detail);
+              }
+            } catch {
+              // ignore json parse failure
+            }
+            if (!track.is_builtin) {
+              setPlaybackError(errMsg);
+              setIsLoadingTrack(false);
+              return false;
+            }
+          } else {
+            blob = await response.blob();
+          }
         }
       } catch {
         if (!track.is_builtin) {
@@ -752,6 +813,12 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     [persistPreferences]
   );
 
+  const cancelUpload = useCallback(() => {
+    if (uploadAbortRef.current) {
+      uploadAbortRef.current.abort();
+    }
+  }, []);
+
   const uploadTrack = useCallback(
     async (file: File, customTitle?: string): Promise<MusicTrack | null> => {
       if (!file) return null;
@@ -769,40 +836,108 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         addToast('Selected audio file is empty.', 'error');
         return null;
       }
-      if (file.size > maxUploadMb * 1024 * 1024) {
+      if (file.size > maxUploadBytes) {
+        const displayMb = maxUploadKb % 1000 === 0 ? maxUploadKb / 1000 : Number((maxUploadKb / 1000).toFixed(1));
+        const fileKb = Math.ceil(file.size / 1024);
         addToast(
-          `Audio file exceeds the ${maxUploadMb} MB maximum upload limit.`,
+          `Audio file (${fileKb.toLocaleString()} KB) exceeds the ${maxUploadKb.toLocaleString()} KB (${displayMb} MB) maximum upload limit.`,
           'error'
         );
         return null;
       }
 
+      const controller = new AbortController();
+      uploadAbortRef.current = controller;
+      activeUploadIdRef.current = null;
       setUploading(true);
+      setUploadProgress(0);
       setPlaybackError(null);
+
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-        if (customTitle && customTitle.trim()) {
-          formData.append('title', customTitle.trim());
-        }
-        const res = await apiRequest<{ track: MusicTrack }>('/api/music/upload', {
+        const effectiveChunkSize = Math.min(chunkSizeBytes || 2 * 1024 * 1024, 3 * 1024 * 1024);
+        const totalChunks = Math.max(1, Math.ceil(file.size / effectiveChunkSize));
+        const initRes = await apiRequest<{
+          upload_id: string;
+          chunk_size_bytes: number;
+        }>('/api/music/upload/init', {
           method: 'POST',
-          body: formData,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            file_size: file.size,
+            total_chunks: totalChunks,
+            title: customTitle?.trim() || undefined,
+            content_type: file.type || undefined,
+          }),
+          signal: controller.signal,
         });
-        if (res.track) {
-          setUploadedTracks((prev) => [res.track, ...prev.filter((t) => t.id !== res.track.id)]);
-          addToast(`Uploaded "${res.track.title}" to your focus library.`, 'success');
-          return res.track;
+
+        const uploadId = initRes.upload_id;
+        activeUploadIdRef.current = uploadId;
+
+        for (let idx = 0; idx < totalChunks; idx += 1) {
+          if (controller.signal.aborted) {
+            throw new DOMException('Aborted', 'AbortError');
+          }
+          const start = idx * effectiveChunkSize;
+          const end = Math.min(file.size, start + effectiveChunkSize);
+          const chunkBlob = file.slice(start, end);
+          const formData = new FormData();
+          formData.append('upload_id', uploadId);
+          formData.append('chunk_index', String(idx));
+          formData.append('file', chunkBlob, file.name);
+
+          await apiRequest<{ upload_id: string; chunk_index: number }>('/api/music/upload/chunk', {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+          });
+          setUploadProgress(Math.round(((idx + 1) / totalChunks) * 95));
+        }
+
+        const completeRes = await apiRequest<{ track: MusicTrack }>('/api/music/upload/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ upload_id: uploadId }),
+          signal: controller.signal,
+        });
+
+        setUploadProgress(100);
+        if (completeRes.track) {
+          setUploadedTracks((prev) => [
+            completeRes.track,
+            ...prev.filter((t) => t.id !== completeRes.track.id),
+          ]);
+          addToast(`Uploaded "${completeRes.track.title}" to your focus library.`, 'success');
+          return completeRes.track;
         }
         return null;
       } catch (err: any) {
+        const uploadIdToCleanup = activeUploadIdRef.current;
+        if (err?.name === 'AbortError' || controller.signal.aborted) {
+          if (uploadIdToCleanup) {
+            apiRequest(`/api/music/upload/${encodeURIComponent(uploadIdToCleanup)}`, {
+              method: 'DELETE',
+            }).catch(() => {});
+          }
+          addToast('Audio upload cancelled.', 'info');
+          return null;
+        }
+        if (uploadIdToCleanup) {
+          apiRequest(`/api/music/upload/${encodeURIComponent(uploadIdToCleanup)}`, {
+            method: 'DELETE',
+          }).catch(() => {});
+        }
         addToast(err?.message || 'Audio upload failed.', 'error');
         return null;
       } finally {
+        uploadAbortRef.current = null;
+        activeUploadIdRef.current = null;
         setUploading(false);
+        setUploadProgress(null);
       }
     },
-    [addToast, maxUploadMb]
+    [addToast, chunkSizeBytes, maxUploadBytes, maxUploadKb]
   );
 
   const deleteTrack = useCallback(
@@ -869,9 +1004,12 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       currentTime,
       duration,
       isLooping,
+      maxUploadBytes,
+      maxUploadKb,
       maxUploadMb,
       storageNotice,
       uploading,
+      uploadProgress,
       deletingTrackId,
       setCategory,
       selectTrack,
@@ -885,6 +1023,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       toggleMute,
       toggleLoop,
       uploadTrack,
+      cancelUpload,
       deleteTrack,
       refreshLibrary,
     }),
@@ -904,9 +1043,12 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       currentTime,
       duration,
       isLooping,
+      maxUploadBytes,
+      maxUploadKb,
       maxUploadMb,
       storageNotice,
       uploading,
+      uploadProgress,
       deletingTrackId,
       setCategory,
       selectTrack,
@@ -920,6 +1062,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       toggleMute,
       toggleLoop,
       uploadTrack,
+      cancelUpload,
       deleteTrack,
       refreshLibrary,
     ]

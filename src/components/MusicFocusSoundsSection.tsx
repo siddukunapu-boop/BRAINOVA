@@ -63,9 +63,11 @@ export const MusicFocusSoundsSection: React.FC = () => {
     currentTime,
     duration,
     isLooping,
-    maxUploadMb,
+    maxUploadBytes,
+    maxUploadKb,
     storageNotice,
     uploading,
+    uploadProgress,
     deletingTrackId,
     setCategory,
     selectTrack,
@@ -77,13 +79,19 @@ export const MusicFocusSoundsSection: React.FC = () => {
     toggleMute,
     toggleLoop,
     uploadTrack,
+    cancelUpload,
     deleteTrack,
   } = useMusicPlayer();
 
   const [customTitle, setCustomTitle] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileValidationError, setFileValidationError] = useState<string | null>(null);
   const [confirmDeleteTrack, setConfirmDeleteTrack] = useState<MusicTrack | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const displayMaxMb =
+    maxUploadKb % 1000 === 0 ? maxUploadKb / 1000 : Number((maxUploadKb / 1000).toFixed(1));
+  const maxLimitLabel = `${maxUploadKb.toLocaleString()} KB (${displayMaxMb} MB)`;
 
   const handleConfirmDeleteSong = async () => {
     if (!confirmDeleteTrack || deletingTrackId) return;
@@ -96,7 +104,28 @@ export const MusicFocusSoundsSection: React.FC = () => {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
     setSelectedFile(file);
-    if (file && !customTitle.trim()) {
+    if (!file) {
+      setFileValidationError(null);
+      return;
+    }
+    const ext = file.name.includes('.')
+      ? `.${file.name.split('.').pop()?.toLowerCase()}`
+      : '';
+    if (!['.mp3', '.wav', '.ogg'].includes(ext)) {
+      setFileValidationError(
+        'Unsupported audio format. Please select an MP3 (.mp3), WAV (.wav), or OGG (.ogg) file.'
+      );
+    } else if (file.size === 0) {
+      setFileValidationError('Selected audio file is empty.');
+    } else if (file.size > maxUploadBytes) {
+      const fileKb = Math.ceil(file.size / 1024);
+      setFileValidationError(
+        `Selected file (${fileKb.toLocaleString()} KB) exceeds the ${maxLimitLabel} maximum upload limit.`
+      );
+    } else {
+      setFileValidationError(null);
+    }
+    if (!customTitle.trim()) {
       const stem = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ');
       setCustomTitle(stem.slice(0, 60));
     }
@@ -108,6 +137,7 @@ export const MusicFocusSoundsSection: React.FC = () => {
     const created = await uploadTrack(selectedFile, customTitle);
     if (created) {
       setSelectedFile(null);
+      setFileValidationError(null);
       setCustomTitle('');
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -454,7 +484,7 @@ export const MusicFocusSoundsSection: React.FC = () => {
             </h3>
             <p className="mfs-upload-desc">
               Add your own study tracks or ambient recordings (supported formats:{' '}
-              <strong>MP3, WAV, OGG</strong> · max <strong>{maxUploadMb} MB</strong> per file).
+              <strong>MP3, WAV, OGG</strong> · max <strong>{maxLimitLabel}</strong> per file).
               Uploaded tracks are private to your account.
             </p>
           </div>
@@ -479,7 +509,7 @@ export const MusicFocusSoundsSection: React.FC = () => {
 
           <div className="mfs-upload-field">
             <label className="form-label" htmlFor="mfs-audio-file-input">
-              Audio File (.mp3, .wav, .ogg)
+              Audio File (.mp3, .wav, .ogg) — Max {maxLimitLabel}
             </label>
             <input
               ref={fileInputRef}
@@ -492,17 +522,21 @@ export const MusicFocusSoundsSection: React.FC = () => {
             />
           </div>
 
-          <div className="mfs-upload-submit-wrap">
+          <div className="mfs-upload-submit-wrap" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={!selectedFile || uploading}
+              disabled={!selectedFile || uploading || Boolean(fileValidationError)}
               data-testid="music-upload-submit-btn"
             >
               {uploading ? (
                 <>
                   <Loader2 size={15} className="mfs-spin" />
-                  <span>Uploading...</span>
+                  <span>
+                    {typeof uploadProgress === 'number'
+                      ? `Uploading (${uploadProgress}%)...`
+                      : 'Uploading...'}
+                  </span>
                 </>
               ) : (
                 <>
@@ -511,8 +545,67 @@ export const MusicFocusSoundsSection: React.FC = () => {
                 </>
               )}
             </button>
+            {uploading && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={cancelUpload}
+                data-testid="music-upload-cancel-btn"
+              >
+                Cancel
+              </button>
+            )}
           </div>
         </form>
+
+        {fileValidationError && (
+          <div
+            role="alert"
+            data-testid="music-upload-validation-error"
+            style={{
+              marginTop: '10px',
+              padding: '10px 12px',
+              borderRadius: '8px',
+              background: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid rgba(239, 68, 68, 0.35)',
+              color: '#fca5a5',
+              fontSize: '0.88rem',
+            }}
+          >
+            {fileValidationError}
+          </div>
+        )}
+
+        {uploading && typeof uploadProgress === 'number' && (
+          <div
+            data-testid="music-upload-progress"
+            style={{
+              marginTop: '10px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+            }}
+          >
+            <div
+              style={{
+                width: '100%',
+                height: '6px',
+                borderRadius: '999px',
+                background: 'rgba(255,255,255,0.1)',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  width: `${Math.min(100, Math.max(0, uploadProgress))}%`,
+                  height: '100%',
+                  background: 'var(--accent-blue)',
+                  transition: 'width 180ms ease',
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Dedicated Uploaded Tracks List Summary */}
         {uploadedTracks.length > 0 && (

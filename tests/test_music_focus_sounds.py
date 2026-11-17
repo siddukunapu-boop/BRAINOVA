@@ -13,10 +13,11 @@ import unittest
 import wave
 from pathlib import Path
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
-from backend.auth import ensure_user_preferences, hash_password, sanitize_preferences_for_client
+from backend.auth import create_access_token, ensure_user_preferences, hash_password, sanitize_preferences_for_client
 from backend.database import get_db, init_db, new_id, utc_now
-from backend.main import stream_uploaded_music_track
+from backend.main import app, stream_uploaded_music_track
 from backend.music_service import (
     BUILTIN_CATEGORIES,
     BUILTIN_TRACKS,
@@ -92,6 +93,10 @@ class TestMusicFocusSoundsAndStudyOSFixes(unittest.TestCase):
                     (uid, email, name, cls._SHARED_PW_HASH, now, now),
                 )
                 ensure_user_preferences(conn, uid)
+
+        cls.client = TestClient(app)
+        cls.headers_a = {"Authorization": f"Bearer {create_access_token(cls.user_a_id, f'{cls.user_a_id}@example.com')}"}
+        cls.headers_b = {"Authorization": f"Bearer {create_access_token(cls.user_b_id, f'{cls.user_b_id}@example.com')}"}
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -359,6 +364,130 @@ class TestMusicFocusSoundsAndStudyOSFixes(unittest.TestCase):
                         cleaned,
                         f"Found user-facing BRAINOVA in {path.name}:{line_no}: {stripped}",
                     )
+
+    def _run_chunked_upload(self, headers: dict, filename: str, payload: bytes, chunk_size: int = 2 * 1024 * 1024):
+        import math
+
+        total_chunks = max(1, math.ceil(len(payload) / chunk_size))
+        init_res = self.client.post(
+            "/api/music/upload/init",
+            headers=headers,
+            json={
+                "filename": filename,
+                "file_size": len(payload),
+                "total_chunks": total_chunks,
+                "title": filename,
+            },
+        )
+        self.assertEqual(init_res.status_code, 200, init_res.text)
+        upload_id = init_res.json()["upload_id"]
+
+        for idx in range(total_chunks):
+            part = payload[idx * chunk_size : (idx + 1) * chunk_size]
+            self.assertLessEqual(len(part), 3 * 1024 * 1024)
+            c_res = self.client.post(
+                "/api/music/upload/chunk",
+                headers=headers,
+                data={"upload_id": upload_id, "chunk_index": str(idx)},
+                files={"file": (filename, part, "audio/wav")},
+            )
+            self.assertEqual(c_res.status_code, 200, c_res.text)
+
+        comp_res = self.client.post(
+            "/api/music/upload/complete",
+            headers=headers,
+            json={"upload_id": upload_id},
+        )
+        return comp_res
+
+    def test_upload_01_40000_kb_limit_and_frontend_ui(self) -> None:
+        """Default limit is exactly 40,000 KB (40,960,000 bytes) and UI displays + validates it."""
+        from backend.music_service import get_max_audio_upload_bytes
+
+        self.assertEqual(get_max_audio_upload_bytes(), 40_000 * 1024)
+        lib_res = self.client.get("/api/music/tracks", headers=self.headers_a)
+        self.assertEqual(lib_res.status_code, 200)
+        body = lib_res.json()
+        self.assertEqual(body["max_upload_kb"], 40000)
+        self.assertEqual(body["max_upload_bytes"], 40_000 * 1024)
+        self.assertLess(body["max_chunk_bytes"], int(4.5 * 1024 * 1024))
+
+        repo_root = Path(__file__).resolve().parent.parent
+        ctx_tsx = (repo_root / "src" / "context" / "MusicPlayerContext.tsx").read_text(encoding="utf-8")
+        sec_tsx = (repo_root / "src" / "components" / "MusicFocusSoundsSection.tsx").read_text(encoding="utf-8")
+        self.assertIn("40000 * 1024", ctx_tsx)
+        self.assertIn("maximum upload limit", ctx_tsx)
+        self.assertIn("maxLimitLabel", sec_tsx)
+        self.assertIn('data-testid="music-upload-validation-error"', sec_tsx)
+        self.assertIn('data-testid="music-upload-cancel-btn"', sec_tsx)
+
+    def test_upload_02_chunked_5mb_20mb_40000kb_and_range_stream(self) -> None:
+        """Chunked uploads at 5 MB, 20 MB, and 40,000 KB succeed, stream via 206 Range, and delete cleanly."""
+        wav_header = _make_valid_wav_bytes(0.1)
+        for label, target_size in [
+            ("5mb", 5 * 1024 * 1024),
+            ("20mb", 20 * 1024 * 1024),
+            ("40000kb", 40_000 * 1024),
+        ]:
+            payload = wav_header + (b"\x00" * (target_size - len(wav_header)))
+            comp_res = self._run_chunked_upload(self.headers_a, f"test_{label}.wav", payload)
+            self.assertEqual(comp_res.status_code, 200, f"{label} failed: {comp_res.text}")
+            track = comp_res.json()["track"]
+            self.assertEqual(track["file_size"], target_size)
+
+            # Verify 206 Partial Content Range streaming (keeps each Vercel response < 4.5 MB)
+            range_res = self.client.get(
+                track["stream_url"],
+                headers={**self.headers_a, "Range": "bytes=0-1048575"},
+            )
+            self.assertEqual(range_res.status_code, 206)
+            self.assertEqual(len(range_res.content), 1048576)
+            self.assertEqual(range_res.headers.get("accept-ranges"), "bytes")
+
+            # Cleanup track after verifying
+            del_res = self.client.delete(f"/api/music/tracks/{track['id']}", headers=self.headers_a)
+            self.assertEqual(del_res.status_code, 200)
+
+    def test_upload_03_reject_over_40000kb_oversized_chunk_and_cancel(self) -> None:
+        """Reject >40,000 KB, reject >3 MiB single chunk, and clean up cancelled uploads."""
+        over_limit = (40_000 * 1024) + 1
+        res_init = self.client.post(
+            "/api/music/upload/init",
+            headers=self.headers_a,
+            json={"filename": "too_big.wav", "file_size": over_limit, "total_chunks": 21},
+        )
+        self.assertEqual(res_init.status_code, 413)
+
+        # Unauthenticated init rejected
+        res_unauth = self.client.post(
+            "/api/music/upload/init",
+            json={"filename": "unauth.wav", "file_size": 1024, "total_chunks": 1},
+        )
+        self.assertEqual(res_unauth.status_code, 401)
+
+        # Oversized single chunk (> 3 MiB) rejected
+        ok_init = self.client.post(
+            "/api/music/upload/init",
+            headers=self.headers_a,
+            json={"filename": "chunk_test.wav", "file_size": 4 * 1024 * 1024, "total_chunks": 2},
+        )
+        self.assertEqual(ok_init.status_code, 200)
+        upload_id = ok_init.json()["upload_id"]
+
+        bad_chunk = self.client.post(
+            "/api/music/upload/chunk",
+            headers=self.headers_a,
+            data={"upload_id": upload_id, "chunk_index": "0"},
+            files={"file": ("chunk_test.wav", b"RIFF" + b"\x00" * (3 * 1024 * 1024 + 10), "audio/wav")},
+        )
+        self.assertEqual(bad_chunk.status_code, 413)
+
+        # Cross-user cancel forbidden, owner cancel succeeds
+        cross_cancel = self.client.delete(f"/api/music/upload/{upload_id}", headers=self.headers_b)
+        self.assertEqual(cross_cancel.status_code, 403)
+        own_cancel = self.client.delete(f"/api/music/upload/{upload_id}", headers=self.headers_a)
+        self.assertEqual(own_cancel.status_code, 200)
+        self.assertTrue(own_cancel.json()["aborted"])
 
 
 if __name__ == "__main__":

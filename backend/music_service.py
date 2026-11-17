@@ -22,23 +22,42 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-from backend.database import AUDIO_DIR, new_id, utc_now
+from backend.database import AUDIO_DIR, is_mongo_authoritative, new_id, utc_now
 
-DEFAULT_MAX_UPLOAD_MB = 15
+DEFAULT_MAX_UPLOAD_KB = 40_000
+DEFAULT_MAX_UPLOAD_BYTES = DEFAULT_MAX_UPLOAD_KB * 1024
+RECOMMENDED_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024  # 2 MiB (well below Vercel 4.5 MB limit)
+MAX_UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024          # 3 MiB hard per-chunk cap
 
 
 def get_max_audio_upload_bytes() -> int:
     raw_bytes = (os.environ.get("BRAINOVA_MAX_AUDIO_UPLOAD_BYTES") or "").strip()
     if raw_bytes.isdigit() and int(raw_bytes) > 0:
         return int(raw_bytes)
+    raw_kb = (os.environ.get("BRAINOVA_MAX_AUDIO_UPLOAD_KB") or "").strip()
+    if raw_kb:
+        try:
+            kb = float(raw_kb)
+            if kb > 0:
+                return int(kb * 1024)
+        except ValueError:
+            pass
     raw_mb = (os.environ.get("BRAINOVA_MAX_AUDIO_UPLOAD_MB") or "").strip()
-    try:
-        mb = float(raw_mb) if raw_mb else float(DEFAULT_MAX_UPLOAD_MB)
-        if mb <= 0:
-            mb = float(DEFAULT_MAX_UPLOAD_MB)
-    except ValueError:
-        mb = float(DEFAULT_MAX_UPLOAD_MB)
-    return int(mb * 1024 * 1024)
+    if raw_mb:
+        try:
+            mb = float(raw_mb)
+            if mb > 0:
+                return int(mb * 1024 * 1024)
+        except ValueError:
+            pass
+    return DEFAULT_MAX_UPLOAD_BYTES
+
+
+def format_upload_limit_label(max_bytes: Optional[int] = None) -> str:
+    limit = max_bytes if max_bytes is not None else get_max_audio_upload_bytes()
+    max_kb = max(1, round(limit / 1024))
+    max_mb = round(max_kb / 1000, 1) if max_kb % 1000 != 0 else int(max_kb // 1000)
+    return f"{max_kb:,} KB ({max_mb} MB)"
 
 
 BUILTIN_CATEGORIES: List[Dict[str, str]] = [
@@ -482,10 +501,9 @@ def validate_uploaded_audio(
 
     max_bytes = get_max_audio_upload_bytes()
     if len(raw_bytes) > max_bytes:
-        max_mb = round(max_bytes / (1024 * 1024), 1)
         raise HTTPException(
             status_code=413,
-            detail=f"Audio file exceeds the maximum allowed upload size of {max_mb:g} MB.",
+            detail=f"Audio file exceeds the maximum allowed upload size of {format_upload_limit_label(max_bytes)}.",
         )
 
     head_lower = raw_bytes[:64].lstrip().lower()
@@ -589,7 +607,10 @@ def list_music_library_for_user(conn: sqlite3.Connection, user_id: str) -> Dict[
 
     uploaded_list = [format_uploaded_track_row(r) for r in rows]
 
-    is_ephemeral = bool(os.environ.get("VERCEL") or os.environ.get("RENDER"))
+    max_bytes = get_max_audio_upload_bytes()
+    max_kb = max(1, round(max_bytes / 1024))
+    max_mb = round(max_kb / 1000, 1) if max_kb % 1000 != 0 else int(max_kb // 1000)
+    durable_mongo = _get_durable_audio_mongo_db() is not None
     return {
         "categories": [
             {
@@ -600,14 +621,100 @@ def list_music_library_for_user(conn: sqlite3.Connection, user_id: str) -> Dict[
         ],
         "builtin_tracks": [],
         "uploaded_tracks": uploaded_list,
-        "max_upload_mb": round(get_max_audio_upload_bytes() / (1024 * 1024), 1),
+        "max_upload_bytes": max_bytes,
+        "max_upload_kb": max_kb,
+        "max_upload_mb": max_mb,
+        "chunk_size_bytes": RECOMMENDED_UPLOAD_CHUNK_BYTES,
+        "max_chunk_bytes": MAX_UPLOAD_CHUNK_BYTES,
         "storage_notice": (
-            "Storage Limitation (Free Serverless Tier): On Vercel (/tmp), uploaded audio files are session-ephemeral and may be cleared on cold starts. "
-            "Metadata persists in MongoDB Atlas. For permanent cloud audio storage on a free tier, connect an S3-compatible object store such as Cloudflare R2 or Supabase Storage."
-            if is_ephemeral
+            "Uploaded audio files are durably stored in MongoDB GridFS for your account."
+            if durable_mongo
             else "Uploaded audio files are stored in authenticated per-user storage on disk."
         ),
     }
+
+
+def _get_durable_audio_mongo_db():
+    """Return the MongoDB database handle when MongoDB is authoritative (production/Vercel), else None."""
+    if not is_mongo_authoritative():
+        return None
+    from backend.mongo_sync import get_mongo_database
+
+    return get_mongo_database(require_configured=False)
+
+
+def _store_audio_binary(
+    track_id: str,
+    user_id: str,
+    storage_filename: str,
+    mime_type: str,
+    raw_bytes: bytes,
+) -> None:
+    """Persist finalized audio bytes to local cache and durable MongoDB GridFS (in production)."""
+    disk_path = resolve_safe_user_track_path(user_id, storage_filename)
+    with open(disk_path, "wb") as f:
+        f.write(raw_bytes)
+
+    mongo_db = _get_durable_audio_mongo_db()
+    if mongo_db is not None:
+        from gridfs import GridFS
+
+        fs = GridFS(mongo_db, collection="music_audio_fs")
+        for existing in fs.find({"metadata.track_id": track_id, "metadata.user_id": user_id}):
+            fs.delete(existing._id)
+        fs.put(
+            raw_bytes,
+            filename=storage_filename,
+            contentType=mime_type,
+            metadata={
+                "track_id": track_id,
+                "user_id": user_id,
+                "storage_filename": storage_filename,
+                "file_size": len(raw_bytes),
+            },
+        )
+
+
+def _delete_durable_audio_binary(track_id: str, user_id: str) -> None:
+    mongo_db = _get_durable_audio_mongo_db()
+    if mongo_db is None:
+        return
+    try:
+        from gridfs import GridFS
+
+        fs = GridFS(mongo_db, collection="music_audio_fs")
+        for existing in fs.find({"metadata.track_id": track_id, "metadata.user_id": user_id}):
+            fs.delete(existing._id)
+    except Exception:
+        pass
+
+
+def get_user_track_size_and_reader(
+    user_id: str,
+    storage_filename: str,
+    track_id: str,
+) -> Tuple[int, Optional[str], Optional[Any]]:
+    """
+    Resolve an uploaded track's total byte size and either a local disk path or a MongoDB GridFS GridOut handle.
+    Raises HTTPException(404) if neither exists.
+    """
+    disk_path = resolve_safe_user_track_path(user_id, storage_filename)
+    if os.path.isfile(disk_path):
+        return os.path.getsize(disk_path), disk_path, None
+
+    mongo_db = _get_durable_audio_mongo_db()
+    if mongo_db is not None:
+        from gridfs import GridFS
+
+        fs = GridFS(mongo_db, collection="music_audio_fs")
+        grid_out = fs.find_one({"metadata.track_id": track_id, "metadata.user_id": user_id})
+        if grid_out is not None:
+            return int(grid_out.length), None, grid_out
+
+    raise HTTPException(
+        status_code=404,
+        detail="Uploaded audio binary is no longer present on storage. Please re-upload the track.",
+    )
 
 
 def save_uploaded_user_track(
@@ -626,7 +733,6 @@ def save_uploaded_user_track(
     track_id = new_id("mtrk")
     safe_stem = sanitize_track_stem(original_filename)
     storage_filename = f"{track_id}_{safe_stem}{ext}"
-    disk_path = resolve_safe_user_track_path(user_id, storage_filename)
 
     display_title = (title or "").strip()
     if not display_title:
@@ -634,8 +740,13 @@ def save_uploaded_user_track(
         display_title = re.sub(r"[_-]+", " ", raw_stem).strip() or "Uploaded Audio Track"
     display_title = display_title[:80]
 
-    with open(disk_path, "wb") as f:
-        f.write(raw_bytes)
+    _store_audio_binary(
+        track_id=track_id,
+        user_id=user_id,
+        storage_filename=storage_filename,
+        mime_type=canonical_mime,
+        raw_bytes=raw_bytes,
+    )
 
     now = utc_now()
     conn.execute(
@@ -664,6 +775,313 @@ def save_uploaded_user_track(
         (track_id, user_id),
     ).fetchone()
     return format_uploaded_track_row(row)
+
+
+def _get_upload_session_dir(user_id: str, upload_id: str) -> str:
+    safe_uid = re.sub(r"[^a-zA-Z0-9_-]", "", user_id)
+    safe_upid = re.sub(r"[^a-zA-Z0-9_-]", "", upload_id)
+    if not safe_uid or not safe_upid:
+        raise HTTPException(status_code=400, detail="Invalid upload session identifier.")
+    session_dir = os.path.join(AUDIO_DIR, "upload_sessions", safe_uid, safe_upid)
+    os.makedirs(session_dir, exist_ok=True)
+    return session_dir
+
+
+def _cleanup_upload_session(conn: sqlite3.Connection, user_id: str, upload_id: str) -> None:
+    import shutil
+
+    safe_uid = re.sub(r"[^a-zA-Z0-9_-]", "", user_id)
+    safe_upid = re.sub(r"[^a-zA-Z0-9_-]", "", upload_id)
+    if safe_uid and safe_upid:
+        session_dir = os.path.join(AUDIO_DIR, "upload_sessions", safe_uid, safe_upid)
+        shutil.rmtree(session_dir, ignore_errors=True)
+
+    mongo_db = _get_durable_audio_mongo_db()
+    if mongo_db is not None:
+        try:
+            mongo_db["music_upload_chunks"].delete_many({"upload_id": upload_id, "user_id": user_id})
+            mongo_db["music_upload_sessions"].delete_one({"id": upload_id, "user_id": user_id})
+        except Exception:
+            pass
+
+    conn.execute(
+        "DELETE FROM music_upload_sessions WHERE id = ? AND user_id = ?",
+        (upload_id, user_id),
+    )
+
+
+def _load_upload_session(conn: sqlite3.Connection, user_id: str, upload_id: str) -> Dict[str, Any]:
+    mongo_db = _get_durable_audio_mongo_db()
+    if mongo_db is not None:
+        doc = mongo_db["music_upload_sessions"].find_one({"id": upload_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Upload session not found or expired.")
+        if doc.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="You do not have permission to access this upload session.")
+        return doc
+
+    row = conn.execute(
+        "SELECT * FROM music_upload_sessions WHERE id = ?",
+        (upload_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Upload session not found or expired.")
+    if row["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to access this upload session.")
+    return dict(row)
+
+
+def init_chunked_audio_upload(
+    conn: sqlite3.Connection,
+    user_id: str,
+    filename: str,
+    file_size: int,
+    total_chunks: int,
+    title: Optional[str] = None,
+    content_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Initialize a chunked audio upload session after validating filename, extension, and total file size."""
+    if not filename or not filename.strip():
+        raise HTTPException(status_code=400, detail="Audio filename is required.")
+
+    base_name = os.path.basename(filename.strip().replace("\\", "/"))
+    ext = os.path.splitext(base_name)[1].lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported audio format. Only MP3 (.mp3), WAV (.wav), and OGG (.ogg) files are allowed.",
+        )
+
+    if file_size <= 0:
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty.")
+
+    max_bytes = get_max_audio_upload_bytes()
+    if file_size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Audio file exceeds the maximum allowed upload size of {format_upload_limit_label(max_bytes)}.",
+        )
+
+    if total_chunks < 1 or total_chunks > 128:
+        raise HTTPException(status_code=400, detail="Invalid total chunk count for audio upload.")
+
+    fmt_label, canonical_mime = ALLOWED_UPLOAD_EXTENSIONS[ext]
+    upload_id = new_id("mup")
+    now = utc_now()
+    session_doc = {
+        "id": upload_id,
+        "user_id": user_id,
+        "original_filename": base_name[:120],
+        "title": (title or "").strip()[:80] or None,
+        "content_type": content_type,
+        "expected_size": int(file_size),
+        "total_chunks": int(total_chunks),
+        "ext": ext,
+        "file_format": fmt_label,
+        "mime_type": canonical_mime,
+        "status": "pending",
+        "created_at": now,
+    }
+
+    mongo_db = _get_durable_audio_mongo_db()
+    if mongo_db is not None:
+        mongo_db["music_upload_sessions"].insert_one(dict(session_doc))
+    else:
+        conn.execute(
+            """
+            INSERT INTO music_upload_sessions (
+                id, user_id, original_filename, title, content_type,
+                expected_size, total_chunks, ext, file_format, mime_type, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (
+                upload_id,
+                user_id,
+                session_doc["original_filename"],
+                session_doc["title"],
+                content_type,
+                int(file_size),
+                int(total_chunks),
+                ext,
+                fmt_label,
+                canonical_mime,
+                now,
+            ),
+        )
+        _get_upload_session_dir(user_id, upload_id)
+
+    return {
+        "upload_id": upload_id,
+        "chunk_size_bytes": RECOMMENDED_UPLOAD_CHUNK_BYTES,
+        "max_chunk_bytes": MAX_UPLOAD_CHUNK_BYTES,
+        "max_upload_bytes": max_bytes,
+        "max_upload_kb": max(1, round(max_bytes / 1024)),
+    }
+
+
+def save_audio_upload_chunk(
+    conn: sqlite3.Connection,
+    user_id: str,
+    upload_id: str,
+    chunk_index: int,
+    raw_chunk: bytes,
+) -> Dict[str, Any]:
+    """Validate and persist a single chunk (< 4.5 MB Vercel limit) for an active upload session."""
+    if not raw_chunk or len(raw_chunk) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded audio chunk is empty.")
+    if len(raw_chunk) > MAX_UPLOAD_CHUNK_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload chunk exceeds the {MAX_UPLOAD_CHUNK_BYTES // (1024 * 1024)} MB per-request chunk limit.",
+        )
+
+    session = _load_upload_session(conn, user_id, upload_id)
+    total_chunks = int(session["total_chunks"])
+    if chunk_index < 0 or chunk_index >= total_chunks:
+        raise HTTPException(status_code=400, detail="Chunk index out of range for upload session.")
+
+    if chunk_index == 0:
+        head_lower = raw_chunk[:64].lstrip().lower()
+        for sig in FORBIDDEN_SIGNATURES:
+            if raw_chunk.startswith(sig) or head_lower.startswith(sig.lower()):
+                _cleanup_upload_session(conn, user_id, upload_id)
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid or unsafe file content detected. Executable or script files are strictly prohibited.",
+                )
+
+    max_bytes = get_max_audio_upload_bytes()
+    mongo_db = _get_durable_audio_mongo_db()
+    if mongo_db is not None:
+        from bson.binary import Binary
+
+        existing_chunks = list(
+            mongo_db["music_upload_chunks"].find(
+                {"upload_id": upload_id, "user_id": user_id},
+                {"chunk_index": 1, "size": 1},
+            )
+        )
+        other_bytes = sum(int(c.get("size") or 0) for c in existing_chunks if int(c.get("chunk_index", -1)) != chunk_index)
+        if other_bytes + len(raw_chunk) > max_bytes:
+            _cleanup_upload_session(conn, user_id, upload_id)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Audio file exceeds the maximum allowed upload size of {format_upload_limit_label(max_bytes)}.",
+            )
+        mongo_db["music_upload_chunks"].update_one(
+            {"upload_id": upload_id, "user_id": user_id, "chunk_index": chunk_index},
+            {
+                "$set": {
+                    "upload_id": upload_id,
+                    "user_id": user_id,
+                    "chunk_index": chunk_index,
+                    "size": len(raw_chunk),
+                    "data": Binary(raw_chunk),
+                    "created_at": utc_now(),
+                }
+            },
+            upsert=True,
+        )
+    else:
+        session_dir = _get_upload_session_dir(user_id, upload_id)
+        chunk_path = os.path.join(session_dir, f"chunk_{chunk_index:05d}.part")
+        other_bytes = 0
+        for fname in os.listdir(session_dir):
+            if fname.startswith("chunk_") and fname.endswith(".part") and fname != f"chunk_{chunk_index:05d}.part":
+                other_bytes += os.path.getsize(os.path.join(session_dir, fname))
+        if other_bytes + len(raw_chunk) > max_bytes:
+            _cleanup_upload_session(conn, user_id, upload_id)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Audio file exceeds the maximum allowed upload size of {format_upload_limit_label(max_bytes)}.",
+            )
+        with open(chunk_path, "wb") as f:
+            f.write(raw_chunk)
+
+    return {
+        "upload_id": upload_id,
+        "chunk_index": chunk_index,
+        "received_bytes": len(raw_chunk),
+    }
+
+
+def complete_chunked_audio_upload(
+    conn: sqlite3.Connection,
+    user_id: str,
+    upload_id: str,
+) -> Dict[str, Any]:
+    """Reassemble chunks, validate total reconstructed file size and audio headers, and finalize durable storage."""
+    session = _load_upload_session(conn, user_id, upload_id)
+    total_chunks = int(session["total_chunks"])
+    expected_size = int(session["expected_size"])
+    max_bytes = get_max_audio_upload_bytes()
+
+    parts: List[bytes] = []
+    mongo_db = _get_durable_audio_mongo_db()
+    if mongo_db is not None:
+        chunk_docs = {
+            int(doc["chunk_index"]): bytes(doc["data"])
+            for doc in mongo_db["music_upload_chunks"].find({"upload_id": upload_id, "user_id": user_id})
+        }
+        for idx in range(total_chunks):
+            if idx not in chunk_docs:
+                raise HTTPException(status_code=400, detail=f"Missing upload chunk {idx + 1} of {total_chunks}.")
+            parts.append(chunk_docs[idx])
+    else:
+        session_dir = _get_upload_session_dir(user_id, upload_id)
+        for idx in range(total_chunks):
+            chunk_path = os.path.join(session_dir, f"chunk_{idx:05d}.part")
+            if not os.path.isfile(chunk_path):
+                raise HTTPException(status_code=400, detail=f"Missing upload chunk {idx + 1} of {total_chunks}.")
+            with open(chunk_path, "rb") as f:
+                parts.append(f.read())
+
+    reconstructed = b"".join(parts)
+    parts.clear()
+    total_size = len(reconstructed)
+
+    if total_size <= 0:
+        _cleanup_upload_session(conn, user_id, upload_id)
+        raise HTTPException(status_code=400, detail="Reconstructed audio file is empty.")
+
+    if total_size > max_bytes:
+        _cleanup_upload_session(conn, user_id, upload_id)
+        raise HTTPException(
+            status_code=413,
+            detail=f"Audio file exceeds the maximum allowed upload size of {format_upload_limit_label(max_bytes)}.",
+        )
+
+    if total_size != expected_size:
+        _cleanup_upload_session(conn, user_id, upload_id)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Reconstructed audio file size ({total_size} bytes) does not match expected size ({expected_size} bytes).",
+        )
+
+    try:
+        track = save_uploaded_user_track(
+            conn=conn,
+            user_id=user_id,
+            original_filename=session["original_filename"],
+            raw_bytes=reconstructed,
+            title=session.get("title"),
+            content_type=session.get("content_type"),
+        )
+    finally:
+        _cleanup_upload_session(conn, user_id, upload_id)
+
+    return track
+
+
+def abort_chunked_audio_upload(
+    conn: sqlite3.Connection,
+    user_id: str,
+    upload_id: str,
+) -> Dict[str, Any]:
+    """Cancel an in-progress chunked upload and clean up its temporary chunks."""
+    _load_upload_session(conn, user_id, upload_id)
+    _cleanup_upload_session(conn, user_id, upload_id)
+    return {"aborted": True, "upload_id": upload_id}
 
 
 def delete_uploaded_user_track(conn: sqlite3.Connection, user_id: str, track_id: str) -> Dict[str, Any]:
@@ -700,6 +1118,8 @@ def delete_uploaded_user_track(conn: sqlite3.Connection, user_id: str, track_id:
             file_removed = True
     except Exception:
         file_removed = False
+
+    _delete_durable_audio_binary(track_id, user_id)
 
     return {
         "deleted": True,

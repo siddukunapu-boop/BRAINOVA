@@ -805,6 +805,23 @@ CREATE TABLE IF NOT EXISTS user_music_tracks (
 
 CREATE INDEX IF NOT EXISTS idx_user_music_tracks_user ON user_music_tracks(user_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS music_upload_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    original_filename TEXT NOT NULL,
+    title TEXT,
+    content_type TEXT,
+    expected_size INTEGER NOT NULL,
+    total_chunks INTEGER NOT NULL,
+    ext TEXT NOT NULL,
+    file_format TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_music_upload_sessions_user ON music_upload_sessions(user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS login_rate_limits (
     rate_key TEXT PRIMARY KEY,
     window_start TEXT NOT NULL,
