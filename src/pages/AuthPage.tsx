@@ -35,33 +35,33 @@ interface PendingVerificationState {
 
 const STUDYOS_FEATURES = [
   {
-    num: '01',
+    id: 'mentor',
     title: 'AI Mentor',
-    desc: 'Intelligent assistance for learning, understanding concepts, and solving doubts.',
+    desc: 'Learn with intelligent assistance.',
     icon: Bot,
   },
   {
-    num: '02',
+    id: 'roadmaps',
     title: 'AI Roadmaps',
-    desc: 'Structured learning journeys that help students progress toward their goals.',
+    desc: 'Follow structured learning paths.',
     icon: Map,
   },
   {
-    num: '03',
+    id: 'launchpad',
     title: 'Career Launchpad',
-    desc: 'Career preparation, skill development, and placement-focused guidance.',
+    desc: 'Prepare for your career.',
     icon: Briefcase,
   },
   {
-    num: '04',
+    id: 'pulse',
     title: 'Tech Pulse',
-    desc: 'Stay informed about technology, development, and industry updates.',
+    desc: 'Stay updated with technology.',
     icon: Zap,
   },
   {
-    num: '05',
+    id: 'focus',
     title: 'Study & Focus',
-    desc: 'Study journals, productivity tools, and focus sessions to build consistency.',
+    desc: 'Build productive study habits.',
     icon: Timer,
   },
 ];
@@ -279,95 +279,55 @@ export const AuthPage: React.FC = () => {
       <div className="auth-ambient-glow" aria-hidden="true" />
 
       <div className="auth-landing-grid">
-        {/* LEFT COLUMN — StudyOS Brand, Features & Authentic Product Showcase */}
+        {/* LEFT PANEL (50%) — Compact StudyOS Introduction */}
         <section className="auth-hero-pane" aria-label="About StudyOS">
-          <div className="auth-hero-brand">
-            <BrainovaLogo size={40} variant="auth" alt="StudyOS Logo" />
-            <span className="auth-brand-wordmark">StudyOS</span>
-          </div>
-
-          <div className="auth-hero-copy">
-            <div className="auth-hero-eyebrow">YOUR PERSONAL LEARNING ECOSYSTEM</div>
-            <h1 className="auth-hero-headline">
-              YOUR LEARNING.
-              <br />
-              <span>YOUR FUTURE.</span>
-            </h1>
-            <p className="auth-hero-sub">
-              One intelligent platform to learn, plan, focus, and grow.
-            </p>
-          </div>
-
-          <div className="auth-features-list" aria-label="Key StudyOS features">
-            {STUDYOS_FEATURES.map((feat, idx) => {
-              const Icon = feat.icon;
-              return (
-                <div
-                  key={feat.num}
-                  className="auth-feature-item"
-                  style={{ animationDelay: `${80 + idx * 55}ms` }}
-                >
-                  <div className="auth-feature-icon" aria-hidden="true">
-                    <Icon size={16} />
-                  </div>
-                  <div className="auth-feature-text">
-                    <div className="auth-feature-title-row">
-                      <span className="auth-feature-num">{feat.num}</span>
-                      <span className="auth-feature-title">{feat.title}</span>
-                    </div>
-                    <p className="auth-feature-desc">{feat.desc}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Authentic Product Workspace Preview */}
-          <div className="auth-showcase-dock" aria-hidden="true">
-            <div className="auth-preview-window">
-              <div className="auth-preview-topbar">
-                <div className="auth-preview-dots">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-                <span className="auth-preview-label">StudyOS Workspace</span>
-              </div>
-              <div className="auth-preview-body">
-                <div className="auth-preview-card auth-preview-roadmap">
-                  <div className="auth-preview-kicker">AI ROADMAP · ACTIVE TRACK</div>
-                  <div className="auth-preview-title">Full Stack Engineering Path</div>
-                  <div className="auth-preview-bars">
-                    <div className="auth-preview-bar-track">
-                      <div className="auth-preview-bar-fill" style={{ width: '74%' }} />
-                    </div>
-                    <div className="auth-preview-bar-track">
-                      <div className="auth-preview-bar-fill" style={{ width: '52%' }} />
-                    </div>
-                  </div>
-                </div>
-                <div className="auth-preview-side">
-                  <div className="auth-preview-card auth-preview-mini">
-                    <div className="auth-preview-kicker">AI MENTOR</div>
-                    <div className="auth-preview-mini-line">Explain async/await &amp; event loops</div>
-                  </div>
-                  <div className="auth-preview-card auth-preview-mini">
-                    <div className="auth-preview-kicker">FOCUS SESSION</div>
-                    <div className="auth-preview-mini-line">25:00 Deep Work · Focus Music</div>
-                  </div>
-                </div>
-              </div>
+          <div className="auth-hero-inner">
+            <div className="auth-hero-brand">
+              <BrainovaLogo size={36} variant="auth" alt="StudyOS Logo" />
+              <span className="auth-brand-wordmark">StudyOS</span>
             </div>
-          </div>
 
-          <footer className="auth-landing-footer">
-            <span>StudyOS</span>
-            <span aria-hidden="true">·</span>
-            <span>Learn Smarter. Think Bigger.</span>
-          </footer>
+            <div className="auth-hero-copy">
+              <div className="auth-hero-eyebrow">YOUR PERSONAL LEARNING ECOSYSTEM</div>
+              <h1 className="auth-hero-headline">
+                Learn Smarter.
+                <br />
+                <span>Achieve More.</span>
+              </h1>
+              <p className="auth-hero-sub">
+                One intelligent space to learn, plan, focus, and build your future.
+              </p>
+            </div>
+
+            <div className="auth-features-list" aria-label="Key StudyOS features">
+              {STUDYOS_FEATURES.map((feat, idx) => {
+                const Icon = feat.icon;
+                return (
+                  <div
+                    key={feat.id}
+                    className="auth-feature-item"
+                    style={{ animationDelay: `${110 + idx * 55}ms` }}
+                  >
+                    <div className="auth-feature-icon" aria-hidden="true">
+                      <Icon size={15} />
+                    </div>
+                    <div className="auth-feature-row-copy">
+                      <span className="auth-feature-title">{feat.title}</span>
+                      <span className="auth-feature-sep" aria-hidden="true">—</span>
+                      <span className="auth-feature-desc">{feat.desc}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <footer className="auth-landing-footer">
+              ONE PLATFORM. ENDLESS POSSIBILITIES.
+            </footer>
+          </div>
         </section>
 
-        {/* RIGHT COLUMN — Integrated Authentication Card */}
+        {/* RIGHT PANEL (50%) — Midnight Luxe Authentication */}
         <section className="auth-form-pane" aria-label="StudyOS authentication">
           <div className="auth-center-stack">
             <div className="auth-card">
