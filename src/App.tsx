@@ -5,6 +5,7 @@ import { AppProvider, useApp } from './context/AppContext';
 import { FocusProvider } from './context/FocusContext';
 import { MusicPlayerProvider } from './context/MusicPlayerContext';
 import { AppShell } from './components/AppShell';
+import { CelebrationCursor } from './components/CelebrationCursor';
 import { pageLoaders } from './lib/routePrefetch';
 
 const AuthPage = lazy(pageLoaders.auth);
@@ -134,6 +135,7 @@ export const App: React.FC = () => {
   return (
     <BrowserRouter>
       <AppProvider>
+        <CelebrationCursor />
         <ProtectedRoutes />
       </AppProvider>
     </BrowserRouter>
